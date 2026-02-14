@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net6.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MeshViewer3D</RootNamespace>
+    <AssemblyName>MeshViewer3D</AssemblyName>
+    <ApplicationIcon />
+    <StartupObject>MeshViewer3D.Program</StartupObject>
+    <AssemblyTitle>MeshViewer3D - WoW 3.3.5a Navigation Mesh Viewer</AssemblyTitle>
+    <Product>MeshViewer3D</Product>
+    <Company>CopilotBuddy</Company>
+    <Copyright>Copyright © 2026</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OpenGL via OpenTK -->
+    <PackageReference Include="OpenTK" Version="4.8.2" />
+    <PackageReference Include="OpenTK.WinForms" Version="4.0.0-pre.8" />
+    
+    <!-- JSON pour configuration -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Resources\Maps.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Resources\*.vert">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Resources\*.frag">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>

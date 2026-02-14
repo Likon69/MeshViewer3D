@@ -1,0 +1,204 @@
+{
+  "maps": [
+    {
+      "id": 0,
+      "name": "Eastern Kingdoms",
+      "continent": "Azeroth"
+    },
+    {
+      "id": 1,
+      "name": "Kalimdor",
+      "continent": "Azeroth"
+    },
+    {
+      "id": 530,
+      "name": "Outland",
+      "continent": "Outland"
+    },
+    {
+      "id": 571,
+      "name": "Northrend",
+      "continent": "Northrend"
+    },
+    {
+      "id": 13,
+      "name": "Testing",
+      "continent": "Test"
+    },
+    {
+      "id": 25,
+      "name": "Scott Test",
+      "continent": "Test"
+    },
+    {
+      "id": 29,
+      "name": "CashTest",
+      "continent": "Test"
+    },
+    {
+      "id": 30,
+      "name": "Alterac Valley",
+      "continent": "Battleground"
+    },
+    {
+      "id": 37,
+      "name": "Azshara Crater",
+      "continent": "Battleground"
+    },
+    {
+      "id": 33,
+      "name": "Shadowfang Keep",
+      "continent": "Instance"
+    },
+    {
+      "id": 34,
+      "name": "Stormwind Stockade",
+      "continent": "Instance"
+    },
+    {
+      "id": 35,
+      "name": "Stormwind Vault",
+      "continent": "Instance"
+    },
+    {
+      "id": 36,
+      "name": "Deadmines",
+      "continent": "Instance"
+    },
+    {
+      "id": 43,
+      "name": "Wailing Caverns",
+      "continent": "Instance"
+    },
+    {
+      "id": 47,
+      "name": "Razorfen Kraul",
+      "continent": "Instance"
+    },
+    {
+      "id": 48,
+      "name": "Blackfathom Deeps",
+      "continent": "Instance"
+    },
+    {
+      "id": 70,
+      "name": "Uldaman",
+      "continent": "Instance"
+    },
+    {
+      "id": 90,
+      "name": "Gnomeregan",
+      "continent": "Instance"
+    },
+    {
+      "id": 109,
+      "name": "Sunken Temple",
+      "continent": "Instance"
+    },
+    {
+      "id": 129,
+      "name": "Razorfen Downs",
+      "continent": "Instance"
+    },
+    {
+      "id": 189,
+      "name": "Scarlet Monastery",
+      "continent": "Instance"
+    },
+    {
+      "id": 209,
+      "name": "Zul'Farrak",
+      "continent": "Instance"
+    },
+    {
+      "id": 229,
+      "name": "Blackrock Spire",
+      "continent": "Instance"
+    },
+    {
+      "id": 230,
+      "name": "Blackrock Depths",
+      "continent": "Instance"
+    },
+    {
+      "id": 249,
+      "name": "Onyxia's Lair",
+      "continent": "Raid"
+    },
+    {
+      "id": 269,
+      "name": "Opening of the Dark Portal",
+      "continent": "Dungeon"
+    },
+    {
+      "id": 289,
+      "name": "Scholomance",
+      "continent": "Instance"
+    },
+    {
+      "id": 309,
+      "name": "Zul'Gurub",
+      "continent": "Raid"
+    },
+    {
+      "id": 329,
+      "name": "Stratholme",
+      "continent": "Instance"
+    },
+    {
+      "id": 349,
+      "name": "Maraudon",
+      "continent": "Instance"
+    },
+    {
+      "id": 389,
+      "name": "Ragefire Chasm",
+      "continent": "Instance"
+    },
+    {
+      "id": 409,
+      "name": "Molten Core",
+      "continent": "Raid"
+    },
+    {
+      "id": 429,
+      "name": "Dire Maul",
+      "continent": "Instance"
+    },
+    {
+      "id": 469,
+      "name": "Blackwing Lair",
+      "continent": "Raid"
+    },
+    {
+      "id": 489,
+      "name": "Warsong Gulch",
+      "continent": "Battleground"
+    },
+    {
+      "id": 509,
+      "name": "Ruins of Ahn'Qiraj",
+      "continent": "Raid"
+    },
+    {
+      "id": 529,
+      "name": "Arathi Basin",
+      "continent": "Battleground"
+    },
+    {
+      "id": 531,
+      "name": "Ahn'Qiraj Temple",
+      "continent": "Raid"
+    },
+    {
+      "id": 532,
+      "name": "Karazhan",
+      "continent": "Raid"
+    },
+    {
+      "id": 533,
+      "name": "Naxxramas",
+      "continent": "Raid"
+    }
+  ]
+}
