@@ -4,10 +4,10 @@
 
 > **Éditeur professionnel de navmesh** recréant les fonctionnalités du **Tripper.Renderer** d'Honorbuddy
 
-[![Version](https://img.shields.io/badge/version-0.5.0--alpha-orange)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.5.0--alpha-orange)]
 [![Status](https://img.shields.io/badge/status-alpha-yellow)]()
 [![Blackspots](https://img.shields.io/badge/blackspots-100%25-brightgreen)](DOCUMENTATION.md)
-[![Completion](https://img.shields.io/badge/completion-45%25-blue)](IMPLEMENTATION_STATUS.md)
+[![Completion](https://img.shields.io/badge/completion-45%25-blue)]
 
 ---
 
