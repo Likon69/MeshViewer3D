@@ -198,41 +198,6 @@ MeshViewer3D/
 
 ---
 
-## 📊 Comparaison avec Tripper.Renderer
-
-| Feature | Tripper | MeshViewer3D |
-|---------|---------|--------------|
-| Visualisation navmesh | ✅ | ✅ 95% |
-| Blackspots | ✅ | ✅ 100% |
-| Jump Links | ✅ | ❌ 0% |
-| Convex Volumes | ✅ | ❌ 0% |
-| WMO Blacklist | ✅ | ❌ 0% |
-| Test Navigation | ✅ | ❌ 0% |
-
-**Verdict**: Excellent viewer + éditeur blackspots complet. Jump Links et Volumes à implémenter pour parité HB.
-
----
-
-## 🤝 Contribution
-
-### Priorités Développement
-
-**Haute Priorité** ⭐⭐⭐:
-1. Jump Links Editor (5 jours)
-2. Convex Volumes Editor (6 jours)
-3. Undo/Redo System (3 jours)
-
-**Moyenne Priorité** ⭐⭐:
-- WMO Blacklist (2 jours)
-- Multi-sélection (1 jour)
-
-**Basse Priorité** ⭐:
-- Test Navigation (4 jours)
-- Per-Model Volumes (3 jours)
-- Polish UI (3 jours)
-
-
----
 
 
 <div align="center">
