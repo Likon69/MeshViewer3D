@@ -3,6 +3,7 @@
 > NavMesh viewer and editor for WoW 3.3.5a (build 12340), inspired by Honorbuddy's Tripper.Renderer.
 
 ![Reference](image/Town%20in%20a%20Box.jpg)
+![Orgrimmar](Resources/Org.png)
 
 ---
 
