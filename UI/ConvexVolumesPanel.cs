@@ -1,6 +1,8 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
+using OpenTK.Mathematics;
 using MeshViewer3D.Core;
 using MeshViewer3D.Data;
 
@@ -29,14 +31,17 @@ namespace MeshViewer3D.UI
         
         // État
         private bool _isClickMode = false;
+        private List<Vector3> _inProgressVertices = new();
+        private Core.UndoRedoManager? _undoRedo;
 
         // Événements
         public event EventHandler? VolumesChanged;
         public event EventHandler<bool>? ClickModeToggled;
 
-        public ConvexVolumesPanel(EditableElements elements)
+        public ConvexVolumesPanel(EditableElements elements, Core.UndoRedoManager? undoRedo = null)
         {
             _elements = elements;
+            _undoRedo = undoRedo;
             SetupUI();
         }
 
@@ -107,8 +112,7 @@ namespace MeshViewer3D.UI
                 Size = new Size(210, 28),
                 BackColor = Color.FromArgb(60, 60, 60),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Enabled = false // Coming soon
+                FlatStyle = FlatStyle.Flat
             };
             _btnClickToPlace.Click += BtnClickToPlace_Click;
             this.Controls.Add(_btnClickToPlace);
@@ -236,8 +240,8 @@ namespace MeshViewer3D.UI
                 {
                     Data.AreaType.Ground => 0,
                     Data.AreaType.Water => 1,
-                    Data.AreaType.MagmaSlime => 2,
-                    Data.AreaType.GroundSteep => 3,
+                    Data.AreaType.Magma => 2,
+                    Data.AreaType.Slime => 3,
                     Data.AreaType.Unwalkable => 4,
                     _ => 0
                 };
@@ -295,6 +299,7 @@ namespace MeshViewer3D.UI
         private void BtnClickToPlace_Click(object? sender, EventArgs e)
         {
             _isClickMode = !_isClickMode;
+            if (!_isClickMode) CancelInProgress();
             _btnClickToPlace.BackColor = _isClickMode 
                 ? Color.FromArgb(0, 122, 204) 
                 : Color.FromArgb(60, 60, 60);
@@ -307,23 +312,98 @@ namespace MeshViewer3D.UI
             {
                 var vol = _elements.ConvexVolumes[_listBox.SelectedIndex];
                 
-                vol.AreaType = _cmbAreaType.SelectedIndex switch
+                var oldAreaType = vol.AreaType;
+                var oldMinHeight = vol.MinHeight;
+                var oldMaxHeight = vol.MaxHeight;
+                
+                var newAreaType = _cmbAreaType.SelectedIndex switch
                 {
                     0 => Data.AreaType.Ground,
                     1 => Data.AreaType.Water,
-                    2 => Data.AreaType.MagmaSlime,
-                    3 => Data.AreaType.GroundSteep,
+                    2 => Data.AreaType.Magma,
+                    3 => Data.AreaType.Slime,
                     4 => Data.AreaType.Unwalkable,
                     _ => Data.AreaType.Ground
                 };
+                var newMinHeight = (float)_nudMinHeight.Value;
+                var newMaxHeight = (float)_nudMaxHeight.Value;
                 
-                vol.MinHeight = (float)_nudMinHeight.Value;
-                vol.MaxHeight = (float)_nudMaxHeight.Value;
-                
-                _elements.ConvexVolumes[_listBox.SelectedIndex] = vol;
-                RefreshList();
-                VolumesChanged?.Invoke(this, EventArgs.Empty);
+                if (_undoRedo != null)
+                {
+                    _undoRedo.Execute(new Core.Commands.EditVolumePropertiesCommand(
+                        _elements, _listBox.SelectedIndex,
+                        oldAreaType, newAreaType,
+                        oldMinHeight, newMinHeight,
+                        oldMaxHeight, newMaxHeight,
+                        () => { RefreshList(); VolumesChanged?.Invoke(this, EventArgs.Empty); }));
+                }
+                else
+                {
+                    vol.AreaType = newAreaType;
+                    vol.MinHeight = newMinHeight;
+                    vol.MaxHeight = newMaxHeight;
+                    _elements.ConvexVolumes[_listBox.SelectedIndex] = vol;
+                    RefreshList();
+                    VolumesChanged?.Invoke(this, EventArgs.Empty);
+                }
             }
+        }
+
+        public bool IsClickMode => _isClickMode;
+        public IReadOnlyList<Vector3> InProgressVertices => _inProgressVertices;
+
+        public void OnWorldClick(Vector3 worldPos)
+        {
+            _inProgressVertices.Add(worldPos);
+            _lblVertexCount.Text = $"Vertices: {_inProgressVertices.Count}";
+        }
+
+        public bool FinalizeVolume()
+        {
+            if (_inProgressVertices.Count < 3)
+                return false;
+
+            // Compute convex hull to guarantee convexity
+            var hullVertices = ConvexVolume.ComputeConvexHull(new List<Vector3>(_inProgressVertices));
+            if (hullVertices.Count < 3)
+                return false;
+
+            var vol = new ConvexVolume
+            {
+                MinHeight = (float)_nudMinHeight.Value,
+                MaxHeight = (float)_nudMaxHeight.Value,
+                AreaType = _cmbAreaType.SelectedIndex switch
+                {
+                    0 => Data.AreaType.Ground,
+                    1 => Data.AreaType.Water,
+                    2 => Data.AreaType.Magma,
+                    3 => Data.AreaType.Slime,
+                    4 => Data.AreaType.Unwalkable,
+                    _ => Data.AreaType.Ground
+                }
+            };
+            vol.Vertices.AddRange(hullVertices);
+            _elements.ConvexVolumes.Add(vol);
+            RefreshList();
+            _listBox.SelectedIndex = _elements.ConvexVolumes.Count - 1;
+            CancelInProgress();
+            VolumesChanged?.Invoke(this, EventArgs.Empty);
+            return true;
+        }
+
+        public void CancelInProgress()
+        {
+            _inProgressVertices.Clear();
+            _lblVertexCount.Text = "Vertices: 0";
+        }
+
+        public void SetClickMode(bool enabled)
+        {
+            _isClickMode = enabled;
+            if (!enabled) CancelInProgress();
+            _btnClickToPlace.BackColor = enabled
+                ? Color.FromArgb(0, 122, 204)
+                : Color.FromArgb(60, 60, 60);
         }
 
         public void RefreshList()

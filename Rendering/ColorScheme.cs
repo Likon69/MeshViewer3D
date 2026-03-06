@@ -11,7 +11,8 @@ namespace MeshViewer3D.Rendering
         ByAreaType,     // Couleur fixe par type d'area (HB default)
         ByHeight,       // Gradient vert→jaune par altitude (HB height mode)
         ByPolygon,      // Couleur unique par polygon (debug)
-        Flat            // Couleur uniforme (debug)
+        Flat,           // Couleur uniforme (debug)
+        ByComponent     // Connected component analysis (flood-fill coloring)
     }
 
     /// <summary>

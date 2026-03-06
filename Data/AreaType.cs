@@ -8,25 +8,12 @@ namespace MeshViewer3D.Data
     /// </summary>
     public enum AreaType : byte
     {
-        // Trinity Core NavArea types (fichiers mmtile réels)
-        Ground = 0,             // Terrain standard walkable (VERT - majorité des polys)
-        Water = 1,              // Zone d'eau (BLEU)
-        MagmaSlime = 2,         // Lave/Slime dangereuse (ROUGE)
-        GroundSteep = 3,        // Terrain pentu (VERT FONCÉ)
-        
-        // Areas 4-62: custom/unused dans Trinity 3.3.5
-        Unused4 = 4,
-        Unused5 = 5,
-        Unused6 = 6,
-        Unused7 = 7,
-        Unused8 = 8,
-        Unused9 = 9,
-        Unused10 = 10,
-        Unused11 = 11,
-        Unused12 = 12,
-        Unused13 = 13,
-        Unused14 = 14,
-        Unused15 = 15,
+        // MaNGOS/HB NavTerrain flags (from MoveMapSharedDefines.h)
+        Empty = 0,              // NAV_EMPTY - no geometry
+        Ground = 1,             // NAV_GROUND - terrain walkable (VERT)
+        Magma = 2,              // NAV_MAGMA - lave (ROUGE)
+        Slime = 4,              // NAV_SLIME - slime (VERT TOXIQUE)
+        Water = 8,              // NAV_WATER - eau (BLEU)
         
         Unwalkable = 63         // Complètement non-navigable (ROUGE VIF)
     }
@@ -59,11 +46,12 @@ namespace MeshViewer3D.Data
         /// </summary>
         public static readonly AreaTypeInfo[] Catalog = new[]
         {
-            // Trinity Core NavArea - couleurs exactes comme screenshots HB
+            // MaNGOS/HB NavTerrain - from MoveMapSharedDefines.h
+            new AreaTypeInfo(AreaType.Empty,        "Empty",        Color.FromArgb(80, 80, 80),     false, 1000.0f, "No geometry"),
             new AreaTypeInfo(AreaType.Ground,       "Ground",       Color.FromArgb(50, 200, 50),    true,  1.0f,    "Terrain walkable"),
+            new AreaTypeInfo(AreaType.Magma,        "Magma",        Color.FromArgb(200, 0, 0),      false, 10.0f,   "Lave dangereuse"),
+            new AreaTypeInfo(AreaType.Slime,        "Slime",        Color.FromArgb(120, 200, 20),   false, 10.0f,   "Slime dangereux"),
             new AreaTypeInfo(AreaType.Water,        "Water",        Color.FromArgb(30, 100, 220),   true,  2.0f,    "Zone d'eau"),
-            new AreaTypeInfo(AreaType.MagmaSlime,   "Magma/Slime",  Color.FromArgb(200, 0, 0),      false, 10.0f,   "Lave/Slime dangereux"),
-            new AreaTypeInfo(AreaType.GroundSteep,  "Steep Ground", Color.FromArgb(30, 120, 30),    true,  1.5f,    "Terrain pentu"),
             new AreaTypeInfo(AreaType.Unwalkable,   "Unwalkable",   Color.FromArgb(200, 0, 0),      false, 1000.0f, "Non-navigable")
         };
 
@@ -81,7 +69,7 @@ namespace MeshViewer3D.Data
             
             // Area 63 = unwalkable
             if (areaId == 63)
-                return Catalog[4]; // Unwalkable
+                return Catalog[5]; // Unwalkable
             
             // Toutes les autres areas (4-62) sont considérées comme Ground walkable
             // avec une légère variation de couleur pour les distinguer
