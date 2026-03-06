@@ -16,8 +16,8 @@ namespace MeshViewer3D.Core
     {
         // Magic numbers (little-endian format comme lu par BinaryReader)
         public const uint MMAP_MAGIC = 0x4D4D4150;      // "MMAP" en little-endian (bytes: 50 41 4D 4D)
-        public const uint DETOUR_MAGIC_DNAV = 0x5641564E; // "VAND" en little-endian (bytes: 4E 56 41 56)  
-        public const uint DETOUR_MAGIC_VAND = 0x444E4156; // "DNAV" en little-endian (bytes: 56 41 4E 44)
+        public const uint DETOUR_MAGIC_DNAV = 0x444E4156; // "DNAV" en little-endian (bytes: 56 41 4E 44)
+        public const uint DETOUR_MAGIC_VAND = 0x5641564E; // "VAND" en little-endian (bytes: 4E 56 41 56)
         
         /// <summary>
         /// Charge une tile navmesh depuis un fichier .mmtile
@@ -312,7 +312,8 @@ namespace MeshViewer3D.Core
                     Radius = br.ReadSingle(),
                     Poly = br.ReadUInt16(),
                     Flags = br.ReadByte(),
-                    Side = br.ReadByte()
+                    Side = br.ReadByte(),
+                    UserId = br.ReadUInt32()
                 };
             }
             return cons;

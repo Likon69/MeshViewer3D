@@ -12,6 +12,11 @@ namespace MeshViewer3D.Data
     public struct Blackspot
     {
         /// <summary>
+        /// Map ID (HB compatibility — 0 = current map / all maps)
+        /// </summary>
+        public uint MapId;
+
+        /// <summary>
         /// Centre du blackspot en coordonnées Detour (X, Y, Z)
         /// </summary>
         public Vector3 Location;

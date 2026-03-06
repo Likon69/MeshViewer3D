@@ -36,7 +36,8 @@ namespace MeshViewer3D.Data
                     new XAttribute("Y", wowPos.Y.ToString("F2")),
                     new XAttribute("Z", wowPos.Z.ToString("F2")),
                     new XAttribute("Radius", bs.Radius.ToString("F2")),
-                    new XAttribute("Height", bs.Height.ToString("F2"))
+                    new XAttribute("Height", bs.Height.ToString("F2")),
+                    new XAttribute("MapId", bs.MapId)
                 );
 
                 if (!string.IsNullOrEmpty(bs.Name))
@@ -68,6 +69,7 @@ namespace MeshViewer3D.Data
             {
                 try
                 {
+                    uint mapId = uint.Parse(element.Attribute("MapId")?.Value ?? "0");
                     float x = float.Parse(element.Attribute("X")?.Value ?? "0");
                     float y = float.Parse(element.Attribute("Y")?.Value ?? "0");
                     float z = float.Parse(element.Attribute("Z")?.Value ?? "0");
@@ -76,6 +78,7 @@ namespace MeshViewer3D.Data
                     string name = element.Attribute("Name")?.Value ?? "";
 
                     var blackspot = Blackspot.FromWoW(x, y, z, radius, height, name);
+                    blackspot.MapId = mapId;
                     blackspots.Add(blackspot);
                 }
                 catch (Exception ex)

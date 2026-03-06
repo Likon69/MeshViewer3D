@@ -52,35 +52,48 @@ namespace MeshViewer3D.Rendering
             GL.UseProgram(ProgramId);
         }
 
+        // Uniform location cache (locations are static per linked program)
+        private readonly System.Collections.Generic.Dictionary<string, int> _uniformCache = new();
+
+        private int GetCachedUniformLocation(string name)
+        {
+            if (!_uniformCache.TryGetValue(name, out int location))
+            {
+                location = GL.GetUniformLocation(ProgramId, name);
+                _uniformCache[name] = location;
+            }
+            return location;
+        }
+
         // Uniform setters
         public void SetInt(string name, int value)
         {
-            GL.Uniform1(GL.GetUniformLocation(ProgramId, name), value);
+            GL.Uniform1(GetCachedUniformLocation(name), value);
         }
 
         public void SetFloat(string name, float value)
         {
-            GL.Uniform1(GL.GetUniformLocation(ProgramId, name), value);
+            GL.Uniform1(GetCachedUniformLocation(name), value);
         }
 
         public void SetVector3(string name, OpenTK.Mathematics.Vector3 value)
         {
-            GL.Uniform3(GL.GetUniformLocation(ProgramId, name), value.X, value.Y, value.Z);
+            GL.Uniform3(GetCachedUniformLocation(name), value.X, value.Y, value.Z);
         }
 
         public void SetVector4(string name, System.Numerics.Vector4 value)
         {
-            GL.Uniform4(GL.GetUniformLocation(ProgramId, name), value.X, value.Y, value.Z, value.W);
+            GL.Uniform4(GetCachedUniformLocation(name), value.X, value.Y, value.Z, value.W);
         }
 
         public void SetMatrix4(string name, OpenTK.Mathematics.Matrix4 value)
         {
-            GL.UniformMatrix4(GL.GetUniformLocation(ProgramId, name), false, ref value);
+            GL.UniformMatrix4(GetCachedUniformLocation(name), false, ref value);
         }
 
         public void SetBool(string name, bool value)
         {
-            GL.Uniform1(GL.GetUniformLocation(ProgramId, name), value ? 1 : 0);
+            GL.Uniform1(GetCachedUniformLocation(name), value ? 1 : 0);
         }
 
         private void CheckCompileErrors(int shader, string type)

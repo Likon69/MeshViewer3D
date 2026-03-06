@@ -138,31 +138,67 @@ namespace MeshViewer3D.Data
         }
 
         /// <summary>
-        /// Génère les triangles pour le rendu du polygone (fan triangulation)
+        /// Computes the convex hull of 3D points projected onto XZ plane (Graham scan).
+        /// Returns vertices ordered counter-clockwise. Preserves Y from original points.
+        /// Returns empty list if fewer than 3 unique points.
         /// </summary>
-        public List<(Vector3, Vector3, Vector3)> Triangulate()
+        public static List<Vector3> ComputeConvexHull(List<Vector3> points)
         {
-            var triangles = new List<(Vector3, Vector3, Vector3)>();
-            if (!IsValid())
-                return triangles;
+            if (points == null || points.Count < 3)
+                return new List<Vector3>();
 
-            // Simple fan triangulation (suppose que le polygone est convexe)
-            var center = GetCenter();
-            center.Y = MinHeight; // Base du volume
-
-            for (int i = 0; i < Vertices.Count; i++)
+            // Remove duplicate XZ positions
+            var unique = new List<Vector3>();
+            var seen = new HashSet<(int, int)>();
+            foreach (var p in points)
             {
-                int next = (i + 1) % Vertices.Count;
-                
-                var v1 = Vertices[i];
-                var v2 = Vertices[next];
-                v1.Y = MinHeight;
-                v2.Y = MinHeight;
+                var key = ((int)(p.X * 100), (int)(p.Z * 100));
+                if (seen.Add(key))
+                    unique.Add(p);
+            }
+            if (unique.Count < 3)
+                return new List<Vector3>();
 
-                triangles.Add((center, v1, v2));
+            // Find lowest Z (then leftmost X) as pivot
+            int minIdx = 0;
+            for (int i = 1; i < unique.Count; i++)
+            {
+                if (unique[i].Z < unique[minIdx].Z ||
+                   (unique[i].Z == unique[minIdx].Z && unique[i].X < unique[minIdx].X))
+                    minIdx = i;
+            }
+            var pivot = unique[minIdx];
+
+            // Sort remaining by polar angle from pivot
+            var sorted = new List<Vector3>(unique);
+            sorted.RemoveAt(minIdx);
+            sorted.Sort((a, b) =>
+            {
+                float angleA = MathF.Atan2(a.Z - pivot.Z, a.X - pivot.X);
+                float angleB = MathF.Atan2(b.Z - pivot.Z, b.X - pivot.X);
+                int cmp = angleA.CompareTo(angleB);
+                if (cmp != 0) return cmp;
+                float distA = (a.X - pivot.X) * (a.X - pivot.X) + (a.Z - pivot.Z) * (a.Z - pivot.Z);
+                float distB = (b.X - pivot.X) * (b.X - pivot.X) + (b.Z - pivot.Z) * (b.Z - pivot.Z);
+                return distA.CompareTo(distB);
+            });
+
+            // Graham scan
+            var hull = new List<Vector3> { pivot };
+            foreach (var p in sorted)
+            {
+                while (hull.Count > 1)
+                {
+                    var o = hull[hull.Count - 2];
+                    var a = hull[hull.Count - 1];
+                    float cross = (a.X - o.X) * (p.Z - o.Z) - (a.Z - o.Z) * (p.X - o.X);
+                    if (cross > 0) break; // CCW turn — keep
+                    hull.RemoveAt(hull.Count - 1);
+                }
+                hull.Add(p);
             }
 
-            return triangles;
+            return hull.Count >= 3 ? hull : new List<Vector3>();
         }
 
         public override string ToString()

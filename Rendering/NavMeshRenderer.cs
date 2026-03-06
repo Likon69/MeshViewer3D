@@ -1,8 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using MeshViewer3D.Core;
+using MeshViewer3D.Core.Formats.Adt;
+using MeshViewer3D.Core.Formats.M2;
+using MeshViewer3D.Core.Formats.Wmo;
+using MeshViewer3D.Core.Mpq;
 
 namespace MeshViewer3D.Rendering
 {
@@ -15,6 +20,7 @@ namespace MeshViewer3D.Rendering
         // Shaders
         private ShaderProgram? _meshShader;
         private ShaderProgram? _lineShader;
+        private ShaderProgram? _coloredLineShader;
 
         // Buffers navmesh
         private int _meshVao, _meshVbo, _meshEbo;
@@ -54,6 +60,28 @@ namespace MeshViewer3D.Rendering
         private DateTime _flashStartTime;
         private const float FlashDurationSeconds = 0.8f;
 
+        // Buffer prévisualisation polygone en cours (Convex Volume placement)
+        private int _previewVao, _previewVbo;
+        private int _previewLineCount;
+
+        // WMO World Object renderers (one per MODF placement)
+        private readonly List<WmoRenderer> _wmoRenderers = new();
+        private bool _showWmoObjects = true;
+        private HashSet<string> _wmoBlacklist = new(StringComparer.OrdinalIgnoreCase);
+
+        // M2 doodad renderers (one per MDDF placement)
+        private readonly List<M2Renderer> _m2Renderers = new();
+        private bool _showM2Objects = true;
+
+        // Raytrace marker
+        private int _raytraceVao, _raytraceVbo;
+        private int _raytraceVertexCount;
+        private Vector3? _raytraceMarkerPos;
+
+        // Test Navigation path
+        private int _testNavVao, _testNavVbo;
+        private int _testNavVertexCount;
+
         private bool _disposed;
 
         /// <summary>
@@ -69,6 +97,10 @@ namespace MeshViewer3D.Rendering
 
             _meshShader = new ShaderProgram(meshVert, meshFrag);
             _lineShader = new ShaderProgram(lineVert, lineFrag);
+
+            string coloredLineVert = System.IO.Path.Combine(resourcePath, "colored_line.vert");
+            string coloredLineFrag = System.IO.Path.Combine(resourcePath, "colored_line.frag");
+            _coloredLineShader = new ShaderProgram(coloredLineVert, coloredLineFrag);
 
             // Configuration OpenGL
             GL.Enable(EnableCap.DepthTest);
@@ -93,6 +125,26 @@ namespace MeshViewer3D.Rendering
             // Générer données de rendu
             var (verts, indices, areas) = mesh.GenerateRenderData();
 
+            // For ByComponent mode, compute connected components and per-polygon colors
+            System.Drawing.Color[]? componentColors = null;
+            int[]? polyOfVertex = null;
+            if (_colorMode == ColorMode.ByComponent)
+            {
+                var components = Core.NavMeshAnalyzer.FindConnectedComponents(mesh, out int componentCount);
+                componentColors = Core.NavMeshAnalyzer.GenerateComponentColors(mesh, components, componentCount);
+
+                // Build mapping: vertexIndex → polyIndex (one entry per vertex)
+                var vtxToPoly = new List<int>();
+                for (int pi = 0; pi < mesh.Polys.Length; pi++)
+                {
+                    int vc = mesh.Polys[pi].VertCount;
+                    if (vc < 3) continue;
+                    for (int v = 0; v < vc; v++)
+                        vtxToPoly.Add(pi);
+                }
+                polyOfVertex = vtxToPoly.ToArray();
+            }
+
             // Créer vertex data avec couleurs
             var vertexData = new List<float>();
             float minHeight = mesh.Header.BMin.Y;
@@ -105,12 +157,16 @@ namespace MeshViewer3D.Rendering
                 vertexData.Add(verts[i].Y);
                 vertexData.Add(verts[i].Z);
 
-                // Couleur (3 floats)
-                int triIndex = i / 3;
-                byte area = triIndex < areas.Count ? areas[triIndex] : (byte)1;
+                // Couleur (3 floats) — areas is per-vertex from GenerateRenderData
+                byte area = i < areas.Count ? areas[i] : (byte)1;
 
                 System.Drawing.Color color;
-                if (_colorMode == ColorMode.ByHeight)
+                if (_colorMode == ColorMode.ByComponent && componentColors != null && polyOfVertex != null)
+                {
+                    int polyIdx = i < polyOfVertex.Length ? polyOfVertex[i] : 0;
+                    color = polyIdx < componentColors.Length ? componentColors[polyIdx] : System.Drawing.Color.Gray;
+                }
+                else if (_colorMode == ColorMode.ByHeight)
                 {
                     bool walkable = area > 0 && area < 63;
                     color = walkable 
@@ -522,6 +578,63 @@ namespace MeshViewer3D.Rendering
             GL.BindVertexArray(0);
         }
 
+        /// <summary>
+        /// Charge la géométrie de prévisualisation pour le polygone Convex Volume en cours de dessin.
+        /// Passer null ou liste vide pour effacer.
+        /// </summary>
+        public void LoadPreviewPolygon(IReadOnlyList<Vector3>? vertices)
+        {
+            if (vertices == null || vertices.Count == 0)
+            {
+                _previewLineCount = 0;
+                return;
+            }
+
+            // Green for polygon outline, yellow for vertex markers
+            const float lr = 0.2f, lg = 1.0f, lb = 0.2f;
+            const float mr = 1.0f, mg = 1.0f, mb = 0.0f;
+            const float crossSize = 0.5f;
+            var lineData = new List<float>();
+
+            // Line loop: N segments connecting consecutive vertices, plus closing segment
+            for (int i = 0; i < vertices.Count; i++)
+            {
+                var va = vertices[i];
+                var vb = vertices[(i + 1) % vertices.Count];
+                lineData.AddRange(new[] { va.X, va.Y, va.Z, lr, lg, lb });
+                lineData.AddRange(new[] { vb.X, vb.Y, vb.Z, lr, lg, lb });
+            }
+
+            // Yellow cross markers at each vertex
+            foreach (var v in vertices)
+            {
+                lineData.AddRange(new[] { v.X - crossSize, v.Y, v.Z, mr, mg, mb });
+                lineData.AddRange(new[] { v.X + crossSize, v.Y, v.Z, mr, mg, mb });
+                lineData.AddRange(new[] { v.X, v.Y, v.Z - crossSize, mr, mg, mb });
+                lineData.AddRange(new[] { v.X, v.Y, v.Z + crossSize, mr, mg, mb });
+            }
+
+            if (_previewVao == 0)
+            {
+                _previewVao = GL.GenVertexArray();
+                _previewVbo = GL.GenBuffer();
+            }
+
+            GL.BindVertexArray(_previewVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _previewVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, lineData.Count * sizeof(float),
+                          lineData.ToArray(), BufferUsageHint.DynamicDraw);
+
+            int stride = 6 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
+
+            _previewLineCount = lineData.Count / 6;
+            GL.BindVertexArray(0);
+        }
+
         private void CreateWireframe(NavMeshData mesh)
         {
             var (edgeVerts, edgeIndices) = mesh.GenerateWireframeData();
@@ -591,7 +704,7 @@ namespace MeshViewer3D.Rendering
         /// </summary>
         public void Render(Camera camera, int viewportWidth, int viewportHeight)
         {
-            if (_currentMesh == null || _meshShader == null || _lineShader == null)
+            if (_currentMesh == null || _meshShader == null || _lineShader == null || _coloredLineShader == null)
                 return;
 
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
@@ -653,12 +766,10 @@ namespace MeshViewer3D.Rendering
             // Render Custom OffMesh Connections (Jump Links créés par l'utilisateur)
             if (_showOffMesh && _customOffmeshVertexCount > 0)
             {
-                _lineShader.Use();
-                _lineShader.SetMatrix4("uModel", model);
-                _lineShader.SetMatrix4("uView", view);
-                _lineShader.SetMatrix4("uProjection", projection);
-                // Les couleurs sont déjà dans le buffer (par vertex)
-                _lineShader.SetVector4("uColor", new System.Numerics.Vector4(1, 1, 1, 1)); // Désactiver override
+                _coloredLineShader.Use();
+                _coloredLineShader.SetMatrix4("uModel", model);
+                _coloredLineShader.SetMatrix4("uView", view);
+                _coloredLineShader.SetMatrix4("uProjection", projection);
 
                 GL.LineWidth(3.0f); // Plus épais pour distinction
                 GL.BindVertexArray(_customOffmeshVao);
@@ -706,6 +817,82 @@ namespace MeshViewer3D.Rendering
                 GL.DepthMask(true);
             }
 
+            // Render preview polygon (Convex Volume placement en cours)
+            if (_previewLineCount > 0)
+            {
+                _coloredLineShader.Use();
+                _coloredLineShader.SetMatrix4("uModel", model);
+                _coloredLineShader.SetMatrix4("uView", view);
+                _coloredLineShader.SetMatrix4("uProjection", projection);
+
+                GL.LineWidth(2.0f);
+                GL.BindVertexArray(_previewVao);
+                GL.DrawArrays(PrimitiveType.Lines, 0, _previewLineCount);
+                GL.LineWidth(1.0f);
+            }
+
+            // Render WMO world objects (semi-transparent, drawn last for correct blending)
+            if (_showWmoObjects && _wmoRenderers.Count > 0 && _meshShader != null)
+            {
+                GL.Enable(EnableCap.Blend);
+                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                GL.DepthMask(false);
+
+                foreach (var wmoRenderer in _wmoRenderers)
+                {
+                    if (_wmoBlacklist.Count > 0 && _wmoBlacklist.Contains(wmoRenderer.Name))
+                        continue;
+                    wmoRenderer.Render(view, projection, _meshShader);
+                }
+
+                GL.DepthMask(true);
+            }
+
+            // Render M2 doodad objects (semi-transparent, same blending as WMO)
+            if (_showM2Objects && _m2Renderers.Count > 0 && _meshShader != null)
+            {
+                GL.Enable(EnableCap.Blend);
+                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                GL.DepthMask(false);
+
+                foreach (var m2Renderer in _m2Renderers)
+                    m2Renderer.Render(view, projection, _meshShader);
+
+                GL.DepthMask(true);
+            }
+
+            // Render test navigation path
+            if (_testNavVertexCount > 0 && _coloredLineShader != null)
+            {
+                GL.Disable(EnableCap.DepthTest);
+                _coloredLineShader.Use();
+                _coloredLineShader.SetMatrix4("uModel", model);
+                _coloredLineShader.SetMatrix4("uView", view);
+                _coloredLineShader.SetMatrix4("uProjection", projection);
+
+                GL.LineWidth(4.0f);
+                GL.BindVertexArray(_testNavVao);
+                GL.DrawArrays(PrimitiveType.Lines, 0, _testNavVertexCount);
+                GL.LineWidth(1.0f);
+                GL.Enable(EnableCap.DepthTest);
+            }
+
+            // Render raytrace marker (3D cross at cursor)
+            if (_raytraceVertexCount > 0 && _coloredLineShader != null)
+            {
+                GL.Disable(EnableCap.DepthTest); // Draw on top of everything
+                _coloredLineShader.Use();
+                _coloredLineShader.SetMatrix4("uModel", model);
+                _coloredLineShader.SetMatrix4("uView", view);
+                _coloredLineShader.SetMatrix4("uProjection", projection);
+
+                GL.LineWidth(3.0f);
+                GL.BindVertexArray(_raytraceVao);
+                GL.DrawArrays(PrimitiveType.Lines, 0, _raytraceVertexCount);
+                GL.LineWidth(1.0f);
+                GL.Enable(EnableCap.DepthTest);
+            }
+
             GL.BindVertexArray(0);
         }
 
@@ -748,15 +935,323 @@ namespace MeshViewer3D.Rendering
             set => _showBlackspots = value;
         }
 
+        public bool ShowWmoObjects
+        {
+            get => _showWmoObjects;
+            set => _showWmoObjects = value;
+        }
+
+        /// <summary>Sets the WMO blacklist. Blacklisted WMO names are not rendered.</summary>
+        public void SetWmoBlacklist(HashSet<string> blacklisted)
+        {
+            _wmoBlacklist = blacklisted ?? new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Console.WriteLine($"[NavMeshRenderer] WMO blacklist updated: {_wmoBlacklist.Count} entries");
+        }
+
+        public bool ShowM2Objects
+        {
+            get => _showM2Objects;
+            set => _showM2Objects = value;
+        }
+
         public bool ShowVolumes
         {
             get => _showVolumes;
             set => _showVolumes = value;
         }
 
+        /// <summary>
+        /// Sets the position of the raytrace marker (3D cross at cursor hit point).
+        /// Pass null to hide the marker.
+        /// </summary>
+        /// <summary>
+        /// Sets the test navigation path to render. Pass null to clear.
+        /// </summary>
+        public void SetTestNavPath(Vector3? startPos, Vector3? endPos, List<Vector3>? waypoints)
+        {
+            // Delete old buffers
+            if (_testNavVao != 0) GL.DeleteVertexArray(_testNavVao);
+            if (_testNavVbo != 0) GL.DeleteBuffer(_testNavVbo);
+            _testNavVao = 0;
+            _testNavVbo = 0;
+            _testNavVertexCount = 0;
+
+            if (waypoints == null || waypoints.Count < 2) return;
+
+            var vertexData = new List<float>();
+
+            // Path line segments (yellow-orange)
+            for (int i = 0; i < waypoints.Count - 1; i++)
+            {
+                var a = waypoints[i];
+                var b = waypoints[i + 1];
+                // Slight Y offset to draw above navmesh
+                vertexData.AddRange(new[] { a.X, a.Y + 0.3f, a.Z, 1.0f, 0.8f, 0.0f }); // yellow-orange
+                vertexData.AddRange(new[] { b.X, b.Y + 0.3f, b.Z, 1.0f, 0.8f, 0.0f });
+            }
+
+            // Start marker (green cross)
+            if (startPos.HasValue)
+                AddCrossVertices(vertexData, startPos.Value, 4.0f, 0.0f, 1.0f, 0.0f);
+
+            // End marker (red cross)
+            if (endPos.HasValue)
+                AddCrossVertices(vertexData, endPos.Value, 4.0f, 1.0f, 0.0f, 0.0f);
+
+            if (vertexData.Count == 0) return;
+
+            var data = vertexData.ToArray();
+
+            _testNavVao = GL.GenVertexArray();
+            GL.BindVertexArray(_testNavVao);
+
+            _testNavVbo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _testNavVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, data.Length * sizeof(float),
+                          data, BufferUsageHint.DynamicDraw);
+
+            int stride = 6 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
+
+            _testNavVertexCount = data.Length / 6;
+            GL.BindVertexArray(0);
+        }
+
+        private static void AddCrossVertices(List<float> data, Vector3 pos, float size, float r, float g, float b)
+        {
+            float y = pos.Y + 0.5f;
+            data.AddRange(new[] { pos.X - size, y, pos.Z, r, g, b });
+            data.AddRange(new[] { pos.X + size, y, pos.Z, r, g, b });
+            data.AddRange(new[] { pos.X, y, pos.Z - size, r, g, b });
+            data.AddRange(new[] { pos.X, y, pos.Z + size, r, g, b });
+            // Vertical
+            data.AddRange(new[] { pos.X, pos.Y - size, pos.Z, r, g, b });
+            data.AddRange(new[] { pos.X, pos.Y + size, pos.Z, r, g, b });
+        }
+
+        public void SetRaytraceMarker(Vector3? position)
+        {
+            _raytraceMarkerPos = position;
+            UpdateRaytraceMarkerBuffers();
+        }
+
+        /// <summary>
+        /// Creates a 3D cross (3 axis lines) at the raytrace hit position.
+        /// </summary>
+        private void UpdateRaytraceMarkerBuffers()
+        {
+            // Delete old buffers
+            if (_raytraceVao != 0) GL.DeleteVertexArray(_raytraceVao);
+            if (_raytraceVbo != 0) GL.DeleteBuffer(_raytraceVbo);
+            _raytraceVao = 0;
+            _raytraceVbo = 0;
+            _raytraceVertexCount = 0;
+
+            if (_raytraceMarkerPos == null) return;
+
+            var pos = _raytraceMarkerPos.Value;
+            const float size = 3.0f; // Cross arm length
+
+            // 3 axis lines (6 vertices) + vertical line to show height clearly
+            // Each vertex: position (3 floats) + color (3 floats)
+            var vertexData = new float[]
+            {
+                // X axis (red)
+                pos.X - size, pos.Y, pos.Z,    1.0f, 0.2f, 0.2f,
+                pos.X + size, pos.Y, pos.Z,    1.0f, 0.2f, 0.2f,
+                // Y axis (green) - vertical
+                pos.X, pos.Y - size, pos.Z,    0.2f, 1.0f, 0.2f,
+                pos.X, pos.Y + size, pos.Z,    0.2f, 1.0f, 0.2f,
+                // Z axis (blue)
+                pos.X, pos.Y, pos.Z - size,    0.4f, 0.4f, 1.0f,
+                pos.X, pos.Y, pos.Z + size,    0.4f, 0.4f, 1.0f,
+                // Yellow outer cross for visibility
+                pos.X - size * 2, pos.Y + 0.5f, pos.Z,    1.0f, 1.0f, 0.0f,
+                pos.X + size * 2, pos.Y + 0.5f, pos.Z,    1.0f, 1.0f, 0.0f,
+                pos.X, pos.Y + 0.5f, pos.Z - size * 2,    1.0f, 1.0f, 0.0f,
+                pos.X, pos.Y + 0.5f, pos.Z + size * 2,    1.0f, 1.0f, 0.0f,
+            };
+
+            _raytraceVao = GL.GenVertexArray();
+            GL.BindVertexArray(_raytraceVao);
+
+            _raytraceVbo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _raytraceVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, vertexData.Length * sizeof(float),
+                          vertexData, BufferUsageHint.DynamicDraw);
+
+            int stride = 6 * sizeof(float);
+            // Position
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+            GL.EnableVertexAttribArray(0);
+            // Color
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
+
+            _raytraceVertexCount = vertexData.Length / 6; // 10 vertices = 5 line segments
+            GL.BindVertexArray(0);
+        }
+
+        /// <summary>
+        /// Loads WMO objects from an ADT tile using the WoW data provider.
+        /// Replaces any previously loaded WMO renderers.
+        /// </summary>
+        public void LoadWorldObjects(WowDataProvider dataProvider, AdtFile adt)
+        {
+            // Clear old renderers
+            foreach (var r in _wmoRenderers) r.Dispose();
+            _wmoRenderers.Clear();
+
+            foreach (var modf in adt.WmoInstances)
+            {
+                if (modf.mwidEntry >= (uint)adt.WmoNames.Length)
+                {
+                    Console.WriteLine($"  WMO skip: mwidEntry {modf.mwidEntry} >= WmoNames.Length {adt.WmoNames.Length}");
+                    continue;
+                }
+
+                string rootPath = adt.WmoNames[modf.mwidEntry];
+                if (string.IsNullOrEmpty(rootPath))
+                {
+                    Console.WriteLine($"  WMO skip: empty root path for mwidEntry {modf.mwidEntry}");
+                    continue;
+                }
+
+                Console.WriteLine($"  WMO: Loading '{rootPath}' pos=({modf.posX:F1},{modf.posY:F1},{modf.posZ:F1})");
+
+                byte[]? rootBytes = dataProvider.GetFileBytes(rootPath);
+                if (rootBytes == null)
+                {
+                    Console.WriteLine($"  WMO FAIL: root file not found in MPQ: {rootPath}");
+                    continue;
+                }
+
+                WmoFile wmoFile;
+                try { wmoFile = new WmoFile(rootBytes); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  WMO FAIL: root parse error: {ex.Message}");
+                    continue;
+                }
+
+                Console.WriteLine($"  WMO: root parsed OK, GroupCount={wmoFile.GroupCount}");
+
+                var groups = new List<WmoGroup>();
+                for (int g = 0; g < wmoFile.GroupCount; g++)
+                {
+                    string groupPath = WmoFile.GetGroupFilePath(rootPath, g);
+                    byte[]? groupBytes = dataProvider.GetFileBytes(groupPath);
+                    if (groupBytes == null)
+                    {
+                        Console.WriteLine($"  WMO FAIL: group {g} not found: {groupPath}");
+                        continue;
+                    }
+                    try
+                    {
+                        var grp = new WmoGroup(groupBytes);
+                        if (grp.IsValid)
+                        {
+                            groups.Add(grp);
+                            Console.WriteLine($"  WMO: group {g} OK — {grp.Geometry.VertexCount} verts, {grp.Geometry.CollisionTriangleCount} col tris, {grp.Geometry.RenderTriangleCount} ren tris");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"  WMO: group {g} invalid (no geometry)");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"  WMO FAIL: group {g} parse error: {ex.Message}");
+                    }
+                }
+
+                if (groups.Count == 0)
+                {
+                    Console.WriteLine($"  WMO skip: 0 valid groups loaded");
+                    continue;
+                }
+
+                var renderer = new WmoRenderer();
+                renderer.Name = Path.GetFileName(rootPath) ?? rootPath;
+                renderer.LoadGeometry(groups, modf);
+                _wmoRenderers.Add(renderer);
+                Console.WriteLine($"  WMO OK: '{rootPath}' — {groups.Count} groups loaded, renderer added");
+            }
+            Console.WriteLine($"  WMO TOTAL: {_wmoRenderers.Count} renderers created");
+
+            // ── M2 doodad loading ──────────────────────────────────────────
+            foreach (var r in _m2Renderers) r.Dispose();
+            _m2Renderers.Clear();
+
+            foreach (var mddf in adt.M2Instances)
+            {
+                if (mddf.mmidEntry >= (uint)adt.M2Names.Length)
+                {
+                    Console.WriteLine($"  M2 skip: mmidEntry {mddf.mmidEntry} >= M2Names.Length {adt.M2Names.Length}");
+                    continue;
+                }
+
+                string m2Path = adt.M2Names[mddf.mmidEntry];
+                if (string.IsNullOrEmpty(m2Path))
+                {
+                    Console.WriteLine($"  M2 skip: empty path for mmidEntry {mddf.mmidEntry}");
+                    continue;
+                }
+
+                // Normalize extension: .mdx/.mdl → .m2 (like MaNGOS ExtractSingleModel)
+                if (m2Path.EndsWith(".mdx", StringComparison.OrdinalIgnoreCase) ||
+                    m2Path.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase))
+                {
+                    m2Path = m2Path[..^2] + "2";
+                }
+
+                Console.WriteLine($"  M2: Loading '{m2Path}' pos=({mddf.posX:F1},{mddf.posY:F1},{mddf.posZ:F1}) scale={mddf.scale}");
+
+                byte[]? m2Bytes = dataProvider.GetFileBytes(m2Path);
+                if (m2Bytes == null)
+                {
+                    Console.WriteLine($"  M2 FAIL: file not found in MPQ: {m2Path}");
+                    continue;
+                }
+
+                M2File m2File;
+                try { m2File = M2File.Load(m2Bytes); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  M2 FAIL: parse error: {ex.Message}");
+                    continue;
+                }
+
+                if (!m2File.IsValid)
+                {
+                    Console.WriteLine($"  M2 skip: no valid bounding geometry in '{m2Path}'");
+                    continue;
+                }
+
+                Console.WriteLine($"  M2: parsed OK — {m2File.VertexCount} bounding verts, {m2File.TriangleCount} bounding tris");
+
+                var renderer = new M2Renderer();
+                renderer.LoadGeometry(m2File, mddf);
+                _m2Renderers.Add(renderer);
+                Console.WriteLine($"  M2 OK: '{m2Path}' — renderer added");
+            }
+            Console.WriteLine($"  M2 TOTAL: {_m2Renderers.Count} renderers created");
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
+
+            // Delete WMO renderers
+            foreach (var r in _wmoRenderers) r.Dispose();
+            _wmoRenderers.Clear();
+
+            // Delete M2 renderers
+            foreach (var r in _m2Renderers) r.Dispose();
+            _m2Renderers.Clear();
 
             // Delete buffers
             if (_meshVao != 0) GL.DeleteVertexArray(_meshVao);
@@ -775,9 +1270,20 @@ namespace MeshViewer3D.Rendering
             if (_volumeEbo != 0) GL.DeleteBuffer(_volumeEbo);
             if (_customOffmeshVao != 0) GL.DeleteVertexArray(_customOffmeshVao);
             if (_customOffmeshVbo != 0) GL.DeleteBuffer(_customOffmeshVbo);
+            if (_previewVao != 0) GL.DeleteVertexArray(_previewVao);
+            if (_previewVbo != 0) GL.DeleteBuffer(_previewVbo);
+
+            // Delete raytrace marker buffers
+            if (_raytraceVao != 0) GL.DeleteVertexArray(_raytraceVao);
+            if (_raytraceVbo != 0) GL.DeleteBuffer(_raytraceVbo);
+
+            // Delete test navigation path buffers
+            if (_testNavVao != 0) GL.DeleteVertexArray(_testNavVao);
+            if (_testNavVbo != 0) GL.DeleteBuffer(_testNavVbo);
 
             _meshShader?.Dispose();
             _lineShader?.Dispose();
+            _coloredLineShader?.Dispose();
 
             _disposed = true;
         }

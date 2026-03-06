@@ -2,11 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Windows.Forms;
 using OpenTK.WinForms;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using MeshViewer3D.Core;
+using MeshViewer3D.Core.Mpq;
+using MeshViewer3D.Core.Formats.Adt;
 using MeshViewer3D.Rendering;
 
 namespace MeshViewer3D.UI
@@ -32,6 +35,9 @@ namespace MeshViewer3D.UI
         private JumpLinksPanel? _jumpLinksPanel;
         private SettingsPanel? _settingsPanel;
         private ConvexVolumesPanel? _volumesPanel;
+        private GameObjectPanel? _gameObjectPanel;
+        private WmoBlacklistPanel? _wmoBlacklistPanel;
+        private PerModelPanel? _perModelPanel;
 
         // État
         private NavMeshData? _currentMesh;
@@ -40,6 +46,7 @@ namespace MeshViewer3D.UI
         private float _fps;
         private bool _blackspotClickMode = false;
         private bool _jumpLinkClickMode = false;
+        private bool _volumeClickMode = false;
 
         // Mouse state
         private Point _lastMousePos;
@@ -49,12 +56,47 @@ namespace MeshViewer3D.UI
         // Drag de blackspot
         private bool _isDraggingBlackspot = false;
         private int _draggedBlackspotIndex = -1;
+        private Vector3 _dragStartPosition; // For undo/redo move command
+
+        // Undo/Redo manager
+        private readonly UndoRedoManager _undoRedo = new();
+
+        // WoW data path for WMO loading
+        private string? _wowDataPath;
+
+        // Raytrace mode
+        private bool _raytraceMode = false;
+        private Vector3? _raytraceHitPoint = null;   // Detour coords of hit point
+        private int _raytraceHitPolyIndex = -1;       // Index into _currentMesh.Polys
+
+        // Test Navigation mode (A→B pathfinding)
+        private bool _testNavMode = false;
+        private Vector3? _testNavStartPoint = null;
+        private int _testNavStartPolyIndex = -1;
+        private Vector3? _testNavEndPoint = null;
+        private int _testNavEndPolyIndex = -1;
+        private List<Vector3>? _testNavPath = null;
 
         public MainForm()
         {
             InitializeComponent();
             SetupUI();
             SetupKeyboardShortcuts();
+            LoadSavedSettings();
+        }
+
+        private void LoadSavedSettings()
+        {
+            AppSettings.Load();
+            if (AppSettings.WowDataPath != null && Directory.Exists(AppSettings.WowDataPath))
+            {
+                var mpqFiles = Directory.GetFiles(AppSettings.WowDataPath, "*.MPQ");
+                if (mpqFiles.Length > 0)
+                {
+                    _wowDataPath = AppSettings.WowDataPath;
+                    _console?.LogSuccess($"WoW Data folder restored: {_wowDataPath} ({mpqFiles.Length} MPQ archives)");
+                }
+            }
         }
 
         private void InitializeComponent()
@@ -82,6 +124,11 @@ namespace MeshViewer3D.UI
             // Échap - Désélectionner
             else if (e.KeyCode == Keys.Escape)
             {
+                if (_volumeClickMode)
+                {
+                    _volumesPanel?.CancelInProgress();
+                    _renderer?.LoadPreviewPolygon(null);
+                }
                 _editableElements.ClearSelection();
                 _blackspotPanel?.UpdateElements(_editableElements);
                 OnEditableElementsChanged();
@@ -119,7 +166,44 @@ namespace MeshViewer3D.UI
                     _editableElements.Blackspots.Clear();
                     _blackspotPanel?.UpdateElements(_editableElements);
                     OnEditableElementsChanged();
+                    _undoRedo.Clear();
                     _console?.LogSuccess("All blackspots cleared");
+                }
+                e.Handled = true;
+            }
+            // Ctrl+Z - Undo
+            else if (e.Control && e.KeyCode == Keys.Z && !e.Shift)
+            {
+                var cmd = _undoRedo.Undo();
+                if (cmd != null)
+                {
+                    _blackspotPanel?.UpdateElements(_editableElements);
+                    _jumpLinksPanel?.UpdateElements(_editableElements);
+                    _volumesPanel?.UpdateElements(_editableElements);
+                    OnEditableElementsChanged();
+                    _console?.Log($"Undo: {cmd.Description}");
+                }
+                else
+                {
+                    _console?.LogWarning("Nothing to undo");
+                }
+                e.Handled = true;
+            }
+            // Ctrl+Y or Ctrl+Shift+Z - Redo
+            else if ((e.Control && e.KeyCode == Keys.Y) || (e.Control && e.Shift && e.KeyCode == Keys.Z))
+            {
+                var cmd = _undoRedo.Redo();
+                if (cmd != null)
+                {
+                    _blackspotPanel?.UpdateElements(_editableElements);
+                    _jumpLinksPanel?.UpdateElements(_editableElements);
+                    _volumesPanel?.UpdateElements(_editableElements);
+                    OnEditableElementsChanged();
+                    _console?.Log($"Redo: {cmd.Description}");
+                }
+                else
+                {
+                    _console?.LogWarning("Nothing to redo");
                 }
                 e.Handled = true;
             }
@@ -152,25 +236,39 @@ namespace MeshViewer3D.UI
             // J - Toggle mode Jump Link (comme dans HB)
             else if (e.KeyCode == Keys.J && !e.Control && !e.Alt)
             {
-                _console?.LogWarning("Jump Link mode - Coming soon!");
-                // TODO: Implémenter JumpLinkTool
+                bool newMode = !_jumpLinkClickMode;
+                _jumpLinkClickMode = newMode;
+                if (newMode) _blackspotClickMode = false;
+                if (_glControl != null)
+                    _glControl.Cursor = newMode ? System.Windows.Forms.Cursors.Cross : System.Windows.Forms.Cursors.Default;
+                _jumpLinksPanel?.SetClickMode(newMode);
+                _console?.Log($"Jump Link click mode: {(newMode ? "ON - Click to place Start then End" : "OFF")}");
                 e.Handled = true;
             }
             // V - Toggle mode Convex Volume (comme dans HB)
             else if (e.KeyCode == Keys.V && !e.Control && !e.Alt)
             {
-                _console?.LogWarning("Convex Volume mode - Coming soon!");
-                // TODO: Implémenter ConvexVolumeTool
+                bool newMode = !_volumeClickMode;
+                _volumeClickMode = newMode;
+                if (newMode) { _blackspotClickMode = false; _jumpLinkClickMode = false; _jumpLinksPanel?.SetClickMode(false); }
+                if (!newMode) _renderer?.LoadPreviewPolygon(null);
+                if (_glControl != null)
+                    _glControl.Cursor = newMode ? System.Windows.Forms.Cursors.Cross : System.Windows.Forms.Cursors.Default;
+                _volumesPanel?.SetClickMode(newMode);
+                _console?.Log($"Volume click mode: {(newMode ? "ON - Click terrain to add vertices, Enter to finalize" : "OFF")}");
                 e.Handled = true;
             }
             // Q - Mode Navigation (désactive tous les modes d'édition) (comme dans HB)
             else if (e.KeyCode == Keys.Q && !e.Control && !e.Alt)
             {
                 _blackspotClickMode = false;
+                _jumpLinkClickMode = false;
+                _volumeClickMode = false;
+                _jumpLinksPanel?.SetClickMode(false);
+                _volumesPanel?.SetClickMode(false);
+                _renderer?.LoadPreviewPolygon(null);
                 if (_glControl != null)
-                {
                     _glControl.Cursor = System.Windows.Forms.Cursors.Default;
-                }
                 _console?.Log("Navigation mode (all edit modes disabled)");
                 e.Handled = true;
             }
@@ -186,10 +284,40 @@ namespace MeshViewer3D.UI
                 FocusOnSelection();
                 e.Handled = true;
             }
+            // Enter - Finaliser le volume en cours
+            else if (e.KeyCode == Keys.Return && !e.Control && !e.Alt && _volumeClickMode)
+            {
+                bool ok = _volumesPanel?.FinalizeVolume() ?? false;
+                if (ok)
+                {
+                    // Wrap the volume the panel just added in an undo command
+                    var justAdded = _editableElements.ConvexVolumes[^1];
+                    _editableElements.ConvexVolumes.RemoveAt(_editableElements.ConvexVolumes.Count - 1);
+                    _undoRedo.Execute(new Core.Commands.AddVolumeCommand(
+                        _editableElements, justAdded, () => { OnEditableElementsChanged(); _volumesPanel?.UpdateElements(_editableElements); }));
+
+                    _volumeClickMode = false;
+                    _volumesPanel?.SetClickMode(false);
+                    _renderer?.LoadPreviewPolygon(null);
+                    if (_glControl != null) _glControl.Cursor = System.Windows.Forms.Cursors.Default;
+                    _console?.LogSuccess("Convex Volume finalized");
+                }
+                else
+                {
+                    _console?.LogWarning("Need at least 3 vertices to finalize volume");
+                }
+                e.Handled = true;
+            }
             // Home - Reset camera (alias comme dans HB)
             else if (e.KeyCode == Keys.Home)
             {
                 OnResetCamera(null, EventArgs.Empty);
+                e.Handled = true;
+            }
+            // A - Analyze NavMesh (connected components, degenerate polys)
+            else if (e.KeyCode == Keys.A && !e.Control && !e.Alt)
+            {
+                OnAnalyzeNavMesh(null, EventArgs.Empty);
                 e.Handled = true;
             }
         }
@@ -201,10 +329,11 @@ namespace MeshViewer3D.UI
                 && _editableElements.SelectedBlackspotIndex < _editableElements.Blackspots.Count)
             {
                 var bs = _editableElements.Blackspots[_editableElements.SelectedBlackspotIndex];
-                _editableElements.Blackspots.RemoveAt(_editableElements.SelectedBlackspotIndex);
+                int idx = _editableElements.SelectedBlackspotIndex;
+                _undoRedo.Execute(new Core.Commands.RemoveBlackspotCommand(
+                    _editableElements, idx, () => OnEditableElementsChanged()));
                 _editableElements.ClearSelection();
                 _blackspotPanel?.UpdateElements(_editableElements);
-                OnEditableElementsChanged();
                 _console?.LogSuccess($"Deleted blackspot: {bs.Name}");
             }
         }
@@ -222,6 +351,8 @@ namespace MeshViewer3D.UI
             var mapMenu = new ToolStripMenuItem("Map");
             mapMenu.DropDownItems.Add("Load Tile...", null, OnLoadTile);
             mapMenu.DropDownItems.Add("Load Folder...", null, OnLoadFolder);
+            mapMenu.DropDownItems.Add(new ToolStripSeparator());
+            mapMenu.DropDownItems.Add("Set WoW Data Folder...", null, OnSetWowDataFolder);
             mapMenu.DropDownItems.Add(new ToolStripSeparator());
             mapMenu.DropDownItems.Add("Close Tile", null, OnCloseTile);
             mapMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -241,6 +372,7 @@ namespace MeshViewer3D.UI
             var colorMenu = new ToolStripMenuItem("Color Mode");
             colorMenu.DropDownItems.Add("By Area Type", null, (s, e) => SetColorMode(ColorMode.ByAreaType));
             colorMenu.DropDownItems.Add("By Height", null, (s, e) => SetColorMode(ColorMode.ByHeight));
+            colorMenu.DropDownItems.Add("By Component (Analysis)", null, (s, e) => SetColorMode(ColorMode.ByComponent));
             viewMenu.DropDownItems.Add(colorMenu);
             
             viewMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -256,6 +388,9 @@ namespace MeshViewer3D.UI
             meshMenu.DropDownItems.Add("Load Jump Links...", null, OnLoadJumpLinks);
             meshMenu.DropDownItems.Add("Save Jump Links...", null, OnSaveJumpLinks);
             meshMenu.DropDownItems.Add("Export Jump Links (CSV)...", null, OnExportJumpLinksCsv);
+            meshMenu.DropDownItems.Add(new ToolStripSeparator());
+            meshMenu.DropDownItems.Add("Load Volumes...", null, OnLoadVolumes);
+            meshMenu.DropDownItems.Add("Save Volumes...", null, OnSaveVolumes);
             menuStrip.Items.Add(meshMenu);
 
             // Menu Tools
@@ -263,6 +398,12 @@ namespace MeshViewer3D.UI
             toolsMenu.DropDownItems.Add("Clear Console", null, (s, e) => _console?.ClearConsole());
             toolsMenu.DropDownItems.Add(new ToolStripSeparator());
             toolsMenu.DropDownItems.Add("Go To Coordinates... (G)", null, OnGoToCoordinates);
+            toolsMenu.DropDownItems.Add(new ToolStripSeparator());
+            toolsMenu.DropDownItems.Add("Analyze NavMesh (A)", null, OnAnalyzeNavMesh);
+            toolsMenu.DropDownItems.Add(new ToolStripSeparator());
+            toolsMenu.DropDownItems.Add("Export Path (JSON)...", null, OnExportPathJson);
+            toolsMenu.DropDownItems.Add("Export Path (CSV)...", null, OnExportPathCsv);
+            toolsMenu.DropDownItems.Add("Export Path (HB Hotspot XML)...", null, OnExportPathHbXml);
             menuStrip.Items.Add(toolsMenu);
 
             // Séparateur avant boutons toolbar
@@ -350,6 +491,14 @@ namespace MeshViewer3D.UI
             _jumpLinksPanel.JumpLinksChanged += (s, e) => OnEditableElementsChanged();
             _jumpLinksPanel.ClickModeToggled += OnJumpLinkClickModeToggled;
             _jumpLinksPanel.JumpLinkCreated += (s, data) => {
+                // Intercept: the panel already added the connection — pop it and re-add via undo command
+                if (_editableElements.CustomOffMeshConnections.Count > 0)
+                {
+                    var justAdded = _editableElements.CustomOffMeshConnections[^1];
+                    _editableElements.CustomOffMeshConnections.RemoveAt(_editableElements.CustomOffMeshConnections.Count - 1);
+                    _undoRedo.Execute(new Core.Commands.AddOffMeshCommand(
+                        _editableElements, justAdded, () => { OnEditableElementsChanged(); _jumpLinksPanel?.UpdateElements(_editableElements); }));
+                }
                 _console?.LogSuccess($"Created Jump Link: {data.start:F1} -> {data.end:F1} ({(data.bidirectional ? "↔" : "→")})" );
             };
             var jumpLinksTab = new TabPage("Jump Links") { BackColor = Color.FromArgb(37, 37, 38) };
@@ -357,40 +506,36 @@ namespace MeshViewer3D.UI
             _editorTabs.TabPages.Add(jumpLinksTab);
 
             // Onglet Convex Volumes (comme dans HB)
-            _volumesPanel = new ConvexVolumesPanel(_editableElements);
+            _volumesPanel = new ConvexVolumesPanel(_editableElements, _undoRedo);
             _volumesPanel.VolumesChanged += (s, e) => OnEditableElementsChanged();
+            _volumesPanel.ClickModeToggled += OnVolumeClickModeToggled;
             var volumesTab = new TabPage("Volumes") { BackColor = Color.FromArgb(37, 37, 38) };
             volumesTab.Controls.Add(_volumesPanel);
             _editorTabs.TabPages.Add(volumesTab);
 
-            // Onglet WMO Blacklist (placeholder - comme dans HB)
-            var wmoTab = new TabPage("WMO Blacklist") { BackColor = Color.FromArgb(37, 37, 38) };
-            var lblWmo = new Label
+            // Onglet Objects (WMO/M2 viewer)
+            _gameObjectPanel = new GameObjectPanel();
+            _gameObjectPanel.WmoVisibilityChanged += v => { if (_renderer != null) _renderer.ShowWmoObjects = v; };
+            _gameObjectPanel.M2VisibilityChanged += v => { if (_renderer != null) _renderer.ShowM2Objects = v; };
+            var objectsTab = new TabPage("Objects") { BackColor = Color.FromArgb(37, 37, 38) };
+            objectsTab.Controls.Add(_gameObjectPanel);
+            _editorTabs.TabPages.Add(objectsTab);
+
+            // Onglet WMO Blacklist (comme dans HB)
+            _wmoBlacklistPanel = new WmoBlacklistPanel();
+            _wmoBlacklistPanel.BlacklistChanged += blacklist =>
             {
-                Text = "WMO Blacklist\n\n" +
-                       "(Coming soon)\n\n" +
-                       "Ignore specific buildings\n" +
-                       "during navmesh generation",
-                Location = new Point(10, 10),
-                Size = new Size(220, 120),
-                ForeColor = Color.White
+                if (_renderer != null) _renderer.SetWmoBlacklist(blacklist);
+                _console?.Log($"WMO blacklist: {blacklist.Count} hidden");
             };
-            wmoTab.Controls.Add(lblWmo);
+            var wmoTab = new TabPage("WMO Blacklist") { BackColor = Color.FromArgb(37, 37, 38) };
+            wmoTab.Controls.Add(_wmoBlacklistPanel);
             _editorTabs.TabPages.Add(wmoTab);
 
-            // Onglet Per-Model Volumes (placeholder - comme dans HB)
+            // Onglet Per-Model Volumes (comme dans HB)
+            _perModelPanel = new PerModelPanel();
             var perModelTab = new TabPage("Per-Model") { BackColor = Color.FromArgb(37, 37, 38) };
-            var lblPerModel = new Label
-            {
-                Text = "Per-Model Volumes\n\n" +
-                       "(Coming soon)\n\n" +
-                       "Define custom volumes\n" +
-                       "for specific M2/WMO models",
-                Location = new Point(10, 10),
-                Size = new Size(220, 120),
-                ForeColor = Color.White
-            };
-            perModelTab.Controls.Add(lblPerModel);
+            perModelTab.Controls.Add(_perModelPanel);
             _editorTabs.TabPages.Add(perModelTab);
 
             // OpenTK GLControl
@@ -503,11 +648,25 @@ namespace MeshViewer3D.UI
         private void GlControl_MouseDown(object? sender, MouseEventArgs e)
         {
             if (_glControl == null) return;
+
+            // Test Navigation mode: click to set start/end
+            if (_testNavMode && e.Button == MouseButtons.Left && _currentMesh != null)
+            {
+                PlaceTestNavPoint(e.X, e.Y);
+                return;
+            }
             
             // Mode placement de Jump Link (Ctrl+Click ou mode actif)
             if (_jumpLinkClickMode && e.Button == MouseButtons.Left && _currentMesh != null)
             {
                 PlaceJumpLinkPointAtCursor(e.X, e.Y);
+                return;
+            }
+            
+            // Mode placement de vertex Convex Volume
+            if (_volumeClickMode && e.Button == MouseButtons.Left && _currentMesh != null)
+            {
+                PlaceConvexVolumeVertex(e.X, e.Y);
                 return;
             }
             
@@ -529,6 +688,7 @@ namespace MeshViewer3D.UI
                 {
                     _isDraggingBlackspot = true;
                     _draggedBlackspotIndex = _editableElements.SelectedBlackspotIndex;
+                    _dragStartPosition = _editableElements.Blackspots[_draggedBlackspotIndex].Location;
                     _isDragging = false; // Prévenir drag caméra
                     return;
                 }
@@ -541,6 +701,12 @@ namespace MeshViewer3D.UI
 
         private void GlControl_MouseMove(object? sender, MouseEventArgs e)
         {
+            // Raytrace: update hit point on every mouse move
+            if (_raytraceMode && _currentMesh != null && _glControl != null && !_isDraggingBlackspot)
+            {
+                UpdateRaytraceHit(e.X, e.Y);
+            }
+
             // Drag de blackspot
             if (_isDraggingBlackspot && _draggedBlackspotIndex >= 0 && _draggedBlackspotIndex < _editableElements.Blackspots.Count)
             {
@@ -567,6 +733,23 @@ namespace MeshViewer3D.UI
 
         private void GlControl_MouseUp(object? sender, MouseEventArgs e)
         {
+            if (_isDraggingBlackspot && _draggedBlackspotIndex >= 0 
+                && _draggedBlackspotIndex < _editableElements.Blackspots.Count)
+            {
+                var newPos = _editableElements.Blackspots[_draggedBlackspotIndex].Location;
+                if ((newPos - _dragStartPosition).Length > 0.01f)
+                {
+                    // Revert to start position first so the command can apply the move
+                    var bs = _editableElements.Blackspots[_draggedBlackspotIndex];
+                    bs.Location = _dragStartPosition;
+                    _editableElements.Blackspots[_draggedBlackspotIndex] = bs;
+
+                    _undoRedo.Execute(new Core.Commands.MoveBlackspotCommand(
+                        _editableElements, _draggedBlackspotIndex,
+                        _dragStartPosition, newPos, () => OnEditableElementsChanged()));
+                    _blackspotPanel?.UpdateElements(_editableElements);
+                }
+            }
             _isDragging = false;
             _isDraggingBlackspot = false;
             _draggedBlackspotIndex = -1;
@@ -574,29 +757,29 @@ namespace MeshViewer3D.UI
 
         private void GlControl_MouseWheel(object? sender, MouseEventArgs e)
         {
-            // Si blackspot sélectionné + Shift : ajuster rayon
+            // Si blackspot sélectionné + Shift : ajuster rayon (undoable)
             if (ModifierKeys.HasFlag(Keys.Shift) && _editableElements.SelectedType == Core.EditableElementType.Blackspot
                 && _editableElements.SelectedBlackspotIndex >= 0 && _editableElements.SelectedBlackspotIndex < _editableElements.Blackspots.Count)
             {
                 var bs = _editableElements.Blackspots[_editableElements.SelectedBlackspotIndex];
-                float delta = e.Delta > 0 ? 1f : -1f;
-                bs.Radius = Math.Max(1f, Math.Min(500f, bs.Radius + delta));
-                _editableElements.Blackspots[_editableElements.SelectedBlackspotIndex] = bs;
-                _blackspotPanel?.UpdateElements(_editableElements);
-                OnEditableElementsChanged();
+                float newRadius = Math.Max(1f, Math.Min(500f, bs.Radius + (e.Delta > 0 ? 1f : -1f)));
+                _undoRedo.Execute(new Core.Commands.ResizeBlackspotCommand(
+                    _editableElements, _editableElements.SelectedBlackspotIndex,
+                    bs.Radius, newRadius, bs.Height, bs.Height,
+                    () => { _blackspotPanel?.UpdateElements(_editableElements); OnEditableElementsChanged(); }));
                 return;
             }
             
-            // Si blackspot sélectionné + Ctrl : ajuster hauteur
+            // Si blackspot sélectionné + Ctrl : ajuster hauteur (undoable)
             if (ModifierKeys.HasFlag(Keys.Control) && _editableElements.SelectedType == Core.EditableElementType.Blackspot
                 && _editableElements.SelectedBlackspotIndex >= 0 && _editableElements.SelectedBlackspotIndex < _editableElements.Blackspots.Count)
             {
                 var bs = _editableElements.Blackspots[_editableElements.SelectedBlackspotIndex];
-                float delta = e.Delta > 0 ? 1f : -1f;
-                bs.Height = Math.Max(1f, Math.Min(200f, bs.Height + delta));
-                _editableElements.Blackspots[_editableElements.SelectedBlackspotIndex] = bs;
-                _blackspotPanel?.UpdateElements(_editableElements);
-                OnEditableElementsChanged();
+                float newHeight = Math.Max(1f, Math.Min(200f, bs.Height + (e.Delta > 0 ? 1f : -1f)));
+                _undoRedo.Execute(new Core.Commands.ResizeBlackspotCommand(
+                    _editableElements, _editableElements.SelectedBlackspotIndex,
+                    bs.Radius, bs.Radius, bs.Height, newHeight,
+                    () => { _blackspotPanel?.UpdateElements(_editableElements); OnEditableElementsChanged(); }));
                 return;
             }
             
@@ -632,6 +815,8 @@ namespace MeshViewer3D.UI
                     
                     _console?.LogSuccess($"Loaded tile ({_currentMesh.TileX},{_currentMesh.TileY}): " +
                         $"{_currentMesh.Header.PolyCount} polys, {_currentMesh.Header.VertCount} verts");
+
+                    TryLoadWorldObjects();
                 }
                 catch (Exception ex)
                 {
@@ -644,12 +829,151 @@ namespace MeshViewer3D.UI
 
         private void OnLoadFolder(object? sender, EventArgs e)
         {
-            _console?.LogWarning("Load Folder not yet implemented");
+            using var fbd = new FolderBrowserDialog
+            {
+                Description = "Select folder containing .mmtile files",
+                UseDescriptionForTitle = true
+            };
+            if (fbd.ShowDialog() != DialogResult.OK) return;
+
+            var files = Directory.GetFiles(fbd.SelectedPath, "*.mmtile");
+            if (files.Length == 0)
+            {
+                _console?.LogWarning("No .mmtile files found in selected folder");
+                return;
+            }
+
+            _console?.Log($"Loading {files.Length} tiles...");
+            _minimap?.Clear();
+
+            var allMeshes = new List<NavMeshData>();
+            int loaded = 0, failed = 0;
+
+            foreach (var file in files)
+            {
+                try
+                {
+                    var mesh = MmtileLoader.LoadTile(file);
+                    allMeshes.Add(mesh);
+                    _minimap?.SetTileLoaded(mesh.TileX, mesh.TileY, true);
+                    loaded++;
+                }
+                catch (Exception ex)
+                {
+                    _console?.LogWarning($"Skipped {Path.GetFileName(file)}: {ex.Message}");
+                    failed++;
+                }
+            }
+
+            if (allMeshes.Count == 0)
+            {
+                _console?.LogError("No tiles loaded successfully");
+                return;
+            }
+
+            // Hard check: aborting before merge is safer than rendering corrupt geometry
+            int totalVerts = 0;
+            foreach (var m in allMeshes) totalVerts += m.Vertices.Length;
+            if (totalVerts > 60000)
+            {
+                _console?.LogError($"Cannot load {loaded} tiles: {totalVerts} total vertices exceed ushort index limit (60000). Load fewer tiles.");
+                _minimap?.Clear();
+                return;
+            }
+
+            _currentMesh = NavMeshData.Merge(allMeshes);
+            _renderer?.LoadMesh(_currentMesh);
+            _camera.FocusOn(_currentMesh.GetCenterDetour(), 800f);
+            _minimap?.SetCurrentTile(allMeshes[0].TileX, allMeshes[0].TileY);
+
+            _console?.LogSuccess($"Loaded {loaded} tiles" +
+                (failed > 0 ? $" ({failed} failed)" : string.Empty) +
+                $" — {_currentMesh.Polys.Length} polys, {_currentMesh.Vertices.Length} verts");
+
+            TryLoadWorldObjects();
         }
+
+        private void OnSetWowDataFolder(object? sender, EventArgs e)
+        {
+            using var fbd = new FolderBrowserDialog
+            {
+                Description = "Select WoW 3.3.5a Data folder (containing MPQ archives)",
+                UseDescriptionForTitle = true
+            };
+            if (fbd.ShowDialog() != DialogResult.OK) return;
+
+            // Validate: folder must contain at least one MPQ
+            var mpqFiles = Directory.GetFiles(fbd.SelectedPath, "*.MPQ");
+            if (mpqFiles.Length == 0)
+            {
+                _console?.LogError("No .MPQ files found in selected folder");
+                MessageBox.Show("The selected folder does not contain any .MPQ archives.\nSelect the WoW 3.3.5a Data\\ folder.",
+                    "Invalid Folder", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            _wowDataPath = fbd.SelectedPath;
+            AppSettings.WowDataPath = _wowDataPath;
+            AppSettings.Save();
+            _console?.LogSuccess($"WoW Data folder set: {_wowDataPath} ({mpqFiles.Length} MPQ archives)");
+
+            // If tiles are already loaded, try loading WMO objects now
+            TryLoadWorldObjects();
+        }
+
+        /// <summary>
+        /// Attempts to load WMO objects from MPQ archives for the currently loaded tile.
+        /// Requires both _wowDataPath and _currentMesh to be set.
+        /// </summary>
+        private void TryLoadWorldObjects()
+        {
+            if (_wowDataPath == null || _currentMesh == null || _renderer == null) return;
+
+            string? mapDir = GetMapDirectory(_currentMesh.MapId);
+            if (mapDir == null)
+            {
+                _console?.LogWarning($"Unknown map ID {_currentMesh.MapId} — cannot load WMO objects");
+                return;
+            }
+
+            string adtPath = $@"World\Maps\{mapDir}\{mapDir}_{_currentMesh.TileX}_{_currentMesh.TileY}.adt";
+            _console?.Log($"Loading ADT: {adtPath}...");
+
+            try
+            {
+                using var provider = WowDataProvider.Open(_wowDataPath);
+                byte[]? adtBytes = provider.GetFileBytes(adtPath);
+                if (adtBytes == null)
+                {
+                    _console?.LogWarning($"ADT not found in MPQ: {adtPath}");
+                    return;
+                }
+
+                var adt = AdtFile.Load(adtBytes);
+                _gameObjectPanel?.LoadObjects(adt);
+                _wmoBlacklistPanel?.LoadWmoNames(adt.WmoNames);
+                _perModelPanel?.LoadModelNames(adt.WmoNames, adt.M2Names);
+                _renderer.LoadWorldObjects(provider, adt);
+
+                int wmoCount = adt.WmoInstances.Length;
+                _console?.LogSuccess($"Loaded {wmoCount} WMO placements from ADT");
+            }
+            catch (Exception ex)
+            {
+                _console?.LogError($"Failed to load WMO objects: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Maps a WoW map ID to its internal directory name used in MPQ file paths.
+        /// Uses Maps.json database for dynamic lookup (supports all 3.3.5a maps).
+        /// </summary>
+        private static string? GetMapDirectory(int mapId) => MapDatabase.GetDirectory(mapId);
 
         private void OnCloseTile(object? sender, EventArgs e)
         {
             _currentMesh = null;
+            ClearTestNavState();
             _minimap?.Clear();
             _console?.Log("Tile closed");
         }
@@ -726,6 +1050,16 @@ namespace MeshViewer3D.UI
             }
             
             _console?.Log($"Jump Link click mode: {(enabled ? "ON - Click to place Start then End" : "OFF")}");
+        }
+
+        private void OnVolumeClickModeToggled(object? sender, bool enabled)
+        {
+            _volumeClickMode = enabled;
+            if (enabled) { _blackspotClickMode = false; _jumpLinkClickMode = false; }
+            if (_glControl != null)
+                _glControl.Cursor = enabled ? System.Windows.Forms.Cursors.Cross : System.Windows.Forms.Cursors.Default;
+            if (!enabled) _renderer?.LoadPreviewPolygon(null);
+            _console?.Log($"Volume click mode: {(enabled ? "ON - Click terrain to add vertices, Enter to finalize" : "OFF")}");
         }
         
         private void PlaceJumpLinkPointAtCursor(int screenX, int screenY)
@@ -804,6 +1138,75 @@ namespace MeshViewer3D.UI
             }
         }
         
+        /// <summary>
+        /// Updates the raytrace hit point for the current cursor position.
+        /// Called on every mouse move when raytrace mode is active.
+        /// </summary>
+        private void UpdateRaytraceHit(int screenX, int screenY)
+        {
+            if (_glControl == null || _currentMesh == null || _renderer == null) return;
+
+            try
+            {
+                var view = _camera.GetViewMatrix();
+                var projection = Matrix4.CreatePerspectiveFieldOfView(
+                    MathHelper.DegreesToRadians(60f),
+                    (float)_glControl.Width / _glControl.Height,
+                    1f, 10000f
+                );
+
+                var ray = Rendering.RayCaster.ScreenToWorldRay(
+                    screenX, screenY,
+                    _glControl.Width, _glControl.Height,
+                    view, projection
+                );
+
+                float closestDistance = float.MaxValue;
+                Vector3 closestHit = Vector3.Zero;
+                int closestPolyIndex = -1;
+
+                for (int i = 0; i < _currentMesh.Polys.Length; i++)
+                {
+                    var poly = _currentMesh.Polys[i];
+                    if (poly.VertCount < 3) continue;
+
+                    for (int j = 1; j < poly.VertCount - 1; j++)
+                    {
+                        var v0 = _currentMesh.Vertices[poly.Verts[0]];
+                        var v1 = _currentMesh.Vertices[poly.Verts[j]];
+                        var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+
+                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
+                        {
+                            if (dist < closestDistance)
+                            {
+                                closestDistance = dist;
+                                closestHit = hit;
+                                closestPolyIndex = i;
+                            }
+                        }
+                    }
+                }
+
+                if (closestPolyIndex >= 0)
+                {
+                    _raytraceHitPoint = closestHit;
+                    _raytraceHitPolyIndex = closestPolyIndex;
+                    _renderer.SetRaytraceMarker(closestHit);
+                }
+                else
+                {
+                    _raytraceHitPoint = null;
+                    _raytraceHitPolyIndex = -1;
+                    _renderer.SetRaytraceMarker(null);
+                }
+            }
+            catch
+            {
+                // Silently ignore raytrace errors during mouse move
+            }
+        }
+
         private void PlaceBlackspotAtCursor(int screenX, int screenY)
         {
             if (_glControl == null || _currentMesh == null) return;
@@ -824,34 +1227,22 @@ namespace MeshViewer3D.UI
                     view, projection
                 );
                 
-                // DEBUG: Log ray info and mesh bounds
-                _console?.Log($"[DEBUG] Ray Origin: ({ray.Origin.X:F1}, {ray.Origin.Y:F1}, {ray.Origin.Z:F1})");
-                _console?.Log($"[DEBUG] Ray Dir: ({ray.Direction.X:F3}, {ray.Direction.Y:F3}, {ray.Direction.Z:F3})");
-                _console?.Log($"[DEBUG] Mesh BMin: ({_currentMesh.Header.BMin.X:F1}, {_currentMesh.Header.BMin.Y:F1}, {_currentMesh.Header.BMin.Z:F1})");
-                _console?.Log($"[DEBUG] Mesh BMax: ({_currentMesh.Header.BMax.X:F1}, {_currentMesh.Header.BMax.Y:F1}, {_currentMesh.Header.BMax.Z:F1})");
-                _console?.Log($"[DEBUG] Camera Eye: ({_camera.GetEyePosition().X:F1}, {_camera.GetEyePosition().Y:F1}, {_camera.GetEyePosition().Z:F1})");
-                _console?.Log($"[DEBUG] Camera Target: ({_camera.Target.X:F1}, {_camera.Target.Y:F1}, {_camera.Target.Z:F1})");
-                
                 // Tester l'intersection avec tous les triangles du navmesh
                 float closestDistance = float.MaxValue;
                 Vector3 closestHit = Vector3.Zero;
                 bool foundHit = false;
-                int testedTriangles = 0;
                 
                 for (int i = 0; i < _currentMesh.Polys.Length; i++)
                 {
                     var poly = _currentMesh.Polys[i];
                     if (poly.VertCount < 3) continue;
                     
-                    // Fan triangulation
                     for (int j = 1; j < poly.VertCount - 1; j++)
                     {
                         var v0 = _currentMesh.Vertices[poly.Verts[0]];
                         var v1 = _currentMesh.Vertices[poly.Verts[j]];
                         var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
-                        testedTriangles++;
                         
-                        // Tester le triangle (double-sided est maintenant dans RayTriangleIntersect)
                         if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
                         {
                             if (dist < closestDistance)
@@ -864,24 +1255,19 @@ namespace MeshViewer3D.UI
                     }
                 }
                 
-                _console?.Log($"[DEBUG] Tested {testedTriangles} triangles");
-                
                 if (foundHit)
                 {
-                    // Créer un nouveau blackspot à la position cliquée
                     var newBlackspot = new Data.Blackspot(
                         closestHit,
-                        10.0f,  // Rayon par défaut
-                        10.0f,  // Hauteur par défaut
+                        10.0f,
+                        10.0f,
                         $"Blackspot {_editableElements.Blackspots.Count + 1}"
                     );
                     
-                    int newIndex = _editableElements.Blackspots.Count;
-                    _editableElements.Blackspots.Add(newBlackspot);
+                    _undoRedo.Execute(new Core.Commands.AddBlackspotCommand(
+                        _editableElements, newBlackspot, () => OnEditableElementsChanged()));
+                    int newIndex = _editableElements.Blackspots.Count - 1;
                     _blackspotPanel?.UpdateElements(_editableElements);
-                    OnEditableElementsChanged();
-                    
-                    // Animation flash pour feedback visuel
                     _renderer?.TriggerBlackspotFlash(newIndex);
                     
                     var wowPos = CoordinateSystem.DetourToWow(closestHit);
@@ -889,23 +1275,87 @@ namespace MeshViewer3D.UI
                 }
                 else
                 {
-                    // DEBUG: Sample first triangle
-                    if (_currentMesh.Polys.Length > 0 && _currentMesh.Polys[0].VertCount >= 3)
-                    {
-                        var poly0 = _currentMesh.Polys[0];
-                        var v0 = _currentMesh.Vertices[poly0.Verts[0]];
-                        var v1 = _currentMesh.Vertices[poly0.Verts[1]];
-                        var v2 = _currentMesh.Vertices[poly0.Verts[2]];
-                        _console?.Log($"[DEBUG] First triangle: v0=({v0.X:F1}, {v0.Y:F1}, {v0.Z:F1})");
-                        _console?.Log($"[DEBUG]                 v1=({v1.X:F1}, {v1.Y:F1}, {v1.Z:F1})");
-                        _console?.Log($"[DEBUG]                 v2=({v2.X:F1}, {v2.Y:F1}, {v2.Z:F1})");
-                    }
-                    _console?.LogWarning("No navmesh intersection found");
+                    _console?.LogWarning("No navmesh intersection found - click directly on the navmesh surface");
                 }
             }
             catch (Exception ex)
             {
                 _console?.LogError($"Error placing blackspot: {ex.Message}");
+            }
+        }
+
+        private void PlaceConvexVolumeVertex(int screenX, int screenY)
+        {
+            if (_glControl == null || _currentMesh == null) return;
+
+            try
+            {
+                var view = _camera.GetViewMatrix();
+                var projection = Matrix4.CreatePerspectiveFieldOfView(
+                    MathHelper.DegreesToRadians(60f),
+                    (float)_glControl.Width / _glControl.Height,
+                    1f, 10000f
+                );
+
+                var ray = Rendering.RayCaster.ScreenToWorldRay(
+                    screenX, screenY,
+                    _glControl.Width, _glControl.Height,
+                    view, projection
+                );
+
+                float closestDistance = float.MaxValue;
+                Vector3 closestHit = Vector3.Zero;
+                bool foundHit = false;
+
+                for (int i = 0; i < _currentMesh.Polys.Length; i++)
+                {
+                    var poly = _currentMesh.Polys[i];
+                    if (poly.VertCount < 3) continue;
+
+                    for (int j = 1; j < poly.VertCount - 1; j++)
+                    {
+                        var v0 = _currentMesh.Vertices[poly.Verts[0]];
+                        var v1 = _currentMesh.Vertices[poly.Verts[j]];
+                        var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+
+                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
+                        {
+                            if (dist < closestDistance)
+                            {
+                                closestDistance = dist;
+                                closestHit = hit;
+                                foundHit = true;
+                            }
+                        }
+                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v2, v1, out float dist2, out Vector3 hit2))
+                        {
+                            if (dist2 < closestDistance)
+                            {
+                                closestDistance = dist2;
+                                closestHit = hit2;
+                                foundHit = true;
+                            }
+                        }
+                    }
+                }
+
+                if (foundHit)
+                {
+                    _volumesPanel.OnWorldClick(closestHit);
+                    _renderer?.LoadPreviewPolygon(_volumesPanel.InProgressVertices);
+
+                    var wowPos = CoordinateSystem.DetourToWow(closestHit);
+                    int count = _volumesPanel.InProgressVertices.Count;
+                    _console?.Log($"Volume vertex {count} placed at [{wowPos.X:F1}, {wowPos.Y:F1}, {wowPos.Z:F1}]");
+                }
+                else
+                {
+                    _console?.LogWarning("No navmesh intersection found");
+                }
+            }
+            catch (Exception ex)
+            {
+                _console?.LogError($"Error placing volume vertex: {ex.Message}");
             }
         }
         
@@ -1050,7 +1500,40 @@ namespace MeshViewer3D.UI
             if (_overlayLabel != null && _currentMesh != null)
             {
                 var wowPos = CoordinateSystem.DetourToWow(_camera.Target);
-                string modeText = _blackspotClickMode ? "\n[CLICK MODE - Place Blackspot]" : "";
+                string modeText = _blackspotClickMode ? "\n[CLICK MODE - Place Blackspot]"
+                    : _jumpLinkClickMode ? $"\n[CLICK MODE - Place Jump Link {(_jumpLinksPanel?.PendingStartPoint == null ? "Start" : "End")}]"
+                    : _volumeClickMode ? $"\n[VOLUME MODE - {_volumesPanel?.InProgressVertices.Count ?? 0} vertices (Enter to finalize)]"
+                    : "";
+
+                if (_raytraceMode && _raytraceHitPoint.HasValue && _raytraceHitPolyIndex >= 0)
+                {
+                    var wowHit = CoordinateSystem.DetourToWow(_raytraceHitPoint.Value);
+                    byte area = _currentMesh.Polys[_raytraceHitPolyIndex].Area;
+                    string areaName = Data.AreaTypeInfo.GetName(area);
+                    modeText += $"\n[RAYTRACE] Hit: {{{wowHit.X:F1}, {wowHit.Y:F1}, {wowHit.Z:F1}}} | Poly #{_raytraceHitPolyIndex} | {areaName} ({area})";
+                }
+                else if (_raytraceMode)
+                {
+                    modeText += "\n[RAYTRACE] No hit";
+                }
+
+                if (_testNavMode)
+                {
+                    if (_testNavStartPoint.HasValue && _testNavEndPoint == null)
+                    {
+                        var ws = CoordinateSystem.DetourToWow(_testNavStartPoint.Value);
+                        modeText += $"\n[TEST NAV] Start: {{{ws.X:F1}, {ws.Y:F1}, {ws.Z:F1}}} — Click end point";
+                    }
+                    else if (_testNavPath != null)
+                    {
+                        modeText += $"\n[TEST NAV] Path: {_testNavPath.Count} waypoints";
+                    }
+                    else if (_testNavStartPoint == null)
+                    {
+                        modeText += "\n[TEST NAV] Click start point";
+                    }
+                }
+
                 _overlayLabel.Text = $"Pos: {{{wowPos.X:F1}, {wowPos.Y:F1}, {wowPos.Z:F1}}}\n" +
                                      $"Tile: ({_currentMesh.TileX}, {_currentMesh.TileY})\n" +
                                      $"Polys: {_currentMesh.Polys.Length} | Verts: {_currentMesh.Vertices.Length}\n" +
@@ -1261,15 +1744,79 @@ namespace MeshViewer3D.UI
             }
         }
 
+        private void OnLoadVolumes(object? sender, EventArgs e)
+        {
+            using var dialog = new OpenFileDialog
+            {
+                Filter = "XML Files (*.xml)|*.xml|All Files (*.*)|*.*",
+                Title = "Load Convex Volumes",
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop)
+            };
+
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    var loaded = Data.ConvexVolumeSerializer.LoadFromXml(dialog.FileName);
+                    _editableElements.ConvexVolumes.AddRange(loaded);
+                    _volumesPanel?.RefreshList();
+                    OnEditableElementsChanged();
+                    _console?.LogSuccess($"Loaded {loaded.Count} convex volumes from {Path.GetFileName(dialog.FileName)}");
+                }
+                catch (Exception ex)
+                {
+                    _console?.LogError($"Failed to load volumes: {ex.Message}");
+                    MessageBox.Show($"Error loading volumes:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void OnSaveVolumes(object? sender, EventArgs e)
+        {
+            if (_editableElements.ConvexVolumes.Count == 0)
+            {
+                MessageBox.Show("No convex volumes to save.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            using var dialog = new SaveFileDialog
+            {
+                Filter = "XML Files (*.xml)|*.xml|All Files (*.*)|*.*",
+                Title = "Save Convex Volumes",
+                DefaultExt = "xml",
+                FileName = "ConvexVolumes.xml",
+                InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop)
+            };
+
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    Data.ConvexVolumeSerializer.SaveToXml(_editableElements.ConvexVolumes, dialog.FileName);
+                    _console?.LogSuccess($"Saved {_editableElements.ConvexVolumes.Count} convex volumes to {Path.GetFileName(dialog.FileName)}");
+                }
+                catch (Exception ex)
+                {
+                    _console?.LogError($"Failed to save volumes: {ex.Message}");
+                    MessageBox.Show($"Error saving volumes:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
         // ========== Toolbar handlers (HB conformity) ==========
         
         private void OnRaytraceToggled(object? sender, EventArgs e)
         {
             if (sender is ToolStripButton btn)
             {
-                // Toggle est automatique avec CheckOnClick=true
-                _console?.Log($"Raytrace mode: {(btn.Checked ? "ON" : "OFF")}");
-                // TODO: Activer le mode raytrace dans le renderer
+                _raytraceMode = btn.Checked;
+                if (!_raytraceMode)
+                {
+                    _raytraceHitPoint = null;
+                    _raytraceHitPolyIndex = -1;
+                    _renderer?.SetRaytraceMarker(null);
+                }
+                _console?.Log($"Raytrace mode: {(_raytraceMode ? "ON" : "OFF")}");
             }
         }
 
@@ -1277,8 +1824,140 @@ namespace MeshViewer3D.UI
         {
             if (sender is ToolStripButton btn)
             {
-                _console?.Log($"Test Navigation mode: {(btn.Checked ? "ON" : "OFF")}");
-                // TODO: Activer le mode test pathfinding
+                _testNavMode = btn.Checked;
+                if (!_testNavMode)
+                {
+                    ClearTestNavState();
+                }
+                else
+                {
+                    ClearTestNavState();
+                }
+                if (_glControl != null)
+                    _glControl.Cursor = _testNavMode ? Cursors.Cross : Cursors.Default;
+                _console?.Log($"Test Navigation mode: {(_testNavMode ? "ON — Click start point" : "OFF")}");
+            }
+        }
+
+        private void ClearTestNavState()
+        {
+            _testNavStartPoint = null;
+            _testNavStartPolyIndex = -1;
+            _testNavEndPoint = null;
+            _testNavEndPolyIndex = -1;
+            _testNavPath = null;
+            _renderer?.SetTestNavPath(null, null, null);
+        }
+
+        private void PlaceTestNavPoint(int screenX, int screenY)
+        {
+            if (_glControl == null || _currentMesh == null || _renderer == null) return;
+
+            try
+            {
+                var view = _camera.GetViewMatrix();
+                var projection = Matrix4.CreatePerspectiveFieldOfView(
+                    MathHelper.DegreesToRadians(60f),
+                    (float)_glControl.Width / _glControl.Height,
+                    1f, 10000f
+                );
+
+                var ray = Rendering.RayCaster.ScreenToWorldRay(
+                    screenX, screenY,
+                    _glControl.Width, _glControl.Height,
+                    view, projection
+                );
+
+                float closestDistance = float.MaxValue;
+                Vector3 closestHit = Vector3.Zero;
+                int closestPolyIndex = -1;
+
+                for (int i = 0; i < _currentMesh.Polys.Length; i++)
+                {
+                    var poly = _currentMesh.Polys[i];
+                    if (poly.VertCount < 3) continue;
+
+                    for (int j = 1; j < poly.VertCount - 1; j++)
+                    {
+                        var v0 = _currentMesh.Vertices[poly.Verts[0]];
+                        var v1 = _currentMesh.Vertices[poly.Verts[j]];
+                        var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+
+                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
+                        {
+                            if (dist < closestDistance)
+                            {
+                                closestDistance = dist;
+                                closestHit = hit;
+                                closestPolyIndex = i;
+                            }
+                        }
+                    }
+                }
+
+                if (closestPolyIndex < 0)
+                {
+                    _console?.LogWarning("No navmesh intersection — click on the navmesh surface");
+                    return;
+                }
+
+                var wowHit = CoordinateSystem.DetourToWow(closestHit);
+
+                if (_testNavStartPoint == null)
+                {
+                    // First click: set start
+                    _testNavStartPoint = closestHit;
+                    _testNavStartPolyIndex = closestPolyIndex;
+                    _testNavEndPoint = null;
+                    _testNavEndPolyIndex = -1;
+                    _testNavPath = null;
+
+                    // Show start marker only
+                    _renderer.SetTestNavPath(closestHit, null, new List<Vector3> { closestHit, closestHit });
+
+                    byte area = _currentMesh.Polys[closestPolyIndex].Area;
+                    _console?.LogSuccess($"Start: [{wowHit.X:F1}, {wowHit.Y:F1}, {wowHit.Z:F1}] Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)}) — Click end point");
+                }
+                else
+                {
+                    // Second click: set end and compute path
+                    _testNavEndPoint = closestHit;
+                    _testNavEndPolyIndex = closestPolyIndex;
+
+                    byte area = _currentMesh.Polys[closestPolyIndex].Area;
+                    _console?.Log($"End: [{wowHit.X:F1}, {wowHit.Y:F1}, {wowHit.Z:F1}] Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)})");
+
+                    // Run A* pathfinding
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
+                    _testNavPath = NavMeshPathfinder.FindPath(
+                        _currentMesh, _testNavStartPoint.Value, _testNavStartPolyIndex,
+                        closestHit, closestPolyIndex);
+                    sw.Stop();
+
+                    if (_testNavPath != null)
+                    {
+                        // Compute path distance
+                        float totalDist = 0;
+                        for (int i = 0; i < _testNavPath.Count - 1; i++)
+                            totalDist += (_testNavPath[i] - _testNavPath[i + 1]).Length;
+
+                        _renderer.SetTestNavPath(_testNavStartPoint, closestHit, _testNavPath);
+                        _console?.LogSuccess($"Path found: {_testNavPath.Count} waypoints, {totalDist:F1} yards, {sw.ElapsedMilliseconds} ms");
+                    }
+                    else
+                    {
+                        _renderer.SetTestNavPath(_testNavStartPoint, closestHit, null);
+                        _console?.LogError($"No path found between start and end ({sw.ElapsedMilliseconds} ms)");
+                    }
+
+                    // Reset for next attempt (keep displaying result)
+                    _testNavStartPoint = null;
+                    _testNavStartPolyIndex = -1;
+                }
+            }
+            catch (Exception ex)
+            {
+                _console?.LogError($"Test Navigation error: {ex.Message}");
             }
         }
 
@@ -1354,6 +2033,164 @@ namespace MeshViewer3D.UI
             {
                 _console?.LogWarning("Nothing to focus on");
             }
+        }
+
+        private void OnAnalyzeNavMesh(object? sender, EventArgs e)
+        {
+            if (_currentMesh == null)
+            {
+                _console?.LogWarning("No mesh loaded — load a tile first");
+                return;
+            }
+
+            var report = Core.NavMeshAnalyzer.GetAnalysisReport(_currentMesh);
+            _console?.Log(report);
+
+            // Switch to component color mode for visual feedback
+            SetColorMode(Rendering.ColorMode.ByComponent);
+            _console?.LogSuccess("Color mode switched to 'By Component' — each connected region has a distinct color");
+        }
+
+        private void OnExportPathJson(object? sender, EventArgs e)
+        {
+            if (_testNavPath == null || _testNavPath.Count < 2)
+            {
+                _console?.LogWarning("No path to export — use Test Navigation first");
+                return;
+            }
+            if (_testNavPath.Any(p => float.IsNaN(p.X) || float.IsNaN(p.Y) || float.IsNaN(p.Z) ||
+                                      float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)))
+            {
+                _console?.LogError("Path contains NaN/Infinity values — cannot export");
+                return;
+            }
+
+            using var dlg = new SaveFileDialog
+            {
+                Filter = "JSON files (*.json)|*.json",
+                DefaultExt = "json",
+                FileName = "path_export.json"
+            };
+
+            if (dlg.ShowDialog() != DialogResult.OK) return;
+
+            try
+            {
+                var pathData = new
+                {
+                    waypoints = _testNavPath.Select(p => new { x = Math.Round(p.X, 4), y = Math.Round(p.Y, 4), z = Math.Round(p.Z, 4) }).ToArray(),
+                    waypointCount = _testNavPath.Count,
+                    totalDistance = ComputePathDistance(_testNavPath),
+                    coordinateSystem = "Detour"
+                };
+
+                var json = Newtonsoft.Json.JsonConvert.SerializeObject(pathData, Newtonsoft.Json.Formatting.Indented);
+                System.IO.File.WriteAllText(dlg.FileName, json);
+                _console?.LogSuccess($"Path exported to JSON: {dlg.FileName} ({_testNavPath.Count} waypoints)");
+            }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+            {
+                _console?.LogError($"Export failed: {ex.Message}");
+                MessageBox.Show($"Failed to export:\n{ex.Message}", "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void OnExportPathCsv(object? sender, EventArgs e)
+        {
+            if (_testNavPath == null || _testNavPath.Count < 2)
+            {
+                _console?.LogWarning("No path to export — use Test Navigation first");
+                return;
+            }
+            if (_testNavPath.Any(p => float.IsNaN(p.X) || float.IsNaN(p.Y) || float.IsNaN(p.Z) ||
+                                      float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)))
+            {
+                _console?.LogError("Path contains NaN/Infinity values — cannot export");
+                return;
+            }
+
+            using var dlg = new SaveFileDialog
+            {
+                Filter = "CSV files (*.csv)|*.csv",
+                DefaultExt = "csv",
+                FileName = "path_export.csv"
+            };
+
+            if (dlg.ShowDialog() != DialogResult.OK) return;
+
+            try
+            {
+                var lines = new List<string> { "Index,X,Y,Z" };
+                for (int i = 0; i < _testNavPath.Count; i++)
+                {
+                    var p = _testNavPath[i];
+                    lines.Add($"{i},{p.X:F4},{p.Y:F4},{p.Z:F4}");
+                }
+
+                System.IO.File.WriteAllLines(dlg.FileName, lines);
+                _console?.LogSuccess($"Path exported to CSV: {dlg.FileName} ({_testNavPath.Count} waypoints)");
+            }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+            {
+                _console?.LogError($"Export failed: {ex.Message}");
+                MessageBox.Show($"Failed to export:\n{ex.Message}", "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void OnExportPathHbXml(object? sender, EventArgs e)
+        {
+            if (_testNavPath == null || _testNavPath.Count < 2)
+            {
+                _console?.LogWarning("No path to export — use Test Navigation first");
+                return;
+            }
+            if (_testNavPath.Any(p => float.IsNaN(p.X) || float.IsNaN(p.Y) || float.IsNaN(p.Z) ||
+                                      float.IsInfinity(p.X) || float.IsInfinity(p.Y) || float.IsInfinity(p.Z)))
+            {
+                _console?.LogError("Path contains NaN/Infinity values — cannot export");
+                return;
+            }
+
+            using var dlg = new SaveFileDialog
+            {
+                Filter = "XML files (*.xml)|*.xml",
+                DefaultExt = "xml",
+                FileName = "path_hotspots.xml"
+            };
+
+            if (dlg.ShowDialog() != DialogResult.OK) return;
+
+            try
+            {
+                // Convert Detour → WoW coordinates for HB format
+                var sb = new System.Text.StringBuilder();
+                sb.AppendLine("<?xml version=\"1.0\" encoding=\"utf-8\"?>");
+                sb.AppendLine("<HBProfile>");
+                sb.AppendLine("  <Hotspots>");
+                foreach (var detourPos in _testNavPath)
+                {
+                    var wow = Core.CoordinateSystem.DetourToWow(detourPos);
+                    sb.AppendLine($"    <Hotspot X=\"{wow.X:F4}\" Y=\"{wow.Y:F4}\" Z=\"{wow.Z:F4}\" />");
+                }
+                sb.AppendLine("  </Hotspots>");
+                sb.AppendLine("</HBProfile>");
+
+                System.IO.File.WriteAllText(dlg.FileName, sb.ToString());
+                _console?.LogSuccess($"Path exported to HB XML: {dlg.FileName} ({_testNavPath.Count} hotspots, WoW coords)");
+            }
+            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
+            {
+                _console?.LogError($"Export failed: {ex.Message}");
+                MessageBox.Show($"Failed to export:\n{ex.Message}", "Export Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private static float ComputePathDistance(List<OpenTK.Mathematics.Vector3> path)
+        {
+            float dist = 0f;
+            for (int i = 0; i < path.Count - 1; i++)
+                dist += (path[i] - path[i + 1]).Length;
+            return dist;
         }
 
         protected override void Dispose(bool disposing)

@@ -290,6 +290,28 @@ namespace MeshViewer3D.UI
             }
         }
 
+        /// <summary>
+        /// Synchronise l'état du mode click depuis l'extérieur (ex: touche J).
+        /// Ne déclenche PAS ClickModeToggled pour éviter les boucles infinies.
+        /// </summary>
+        public void SetClickMode(bool enabled)
+        {
+            if (_isClickMode == enabled) return;
+            _isClickMode = enabled;
+            if (_isClickMode)
+            {
+                _isPlacingStart = true;
+                _pendingStart = null;
+                _btnClickToPlace.Text = "Click to Place Start";
+                _btnClickToPlace.BackColor = Color.FromArgb(0, 122, 204);
+            }
+            else
+            {
+                _btnClickToPlace.Text = "Click to Place Start";
+                _btnClickToPlace.BackColor = Color.FromArgb(60, 60, 60);
+            }
+        }
+
         private void BtnClickToPlace_Click(object? sender, EventArgs e)
         {
             _isClickMode = !_isClickMode;

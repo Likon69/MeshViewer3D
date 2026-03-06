@@ -1,204 +1,98 @@
 {
   "maps": [
-    {
-      "id": 0,
-      "name": "Eastern Kingdoms",
-      "continent": "Azeroth"
-    },
-    {
-      "id": 1,
-      "name": "Kalimdor",
-      "continent": "Azeroth"
-    },
-    {
-      "id": 530,
-      "name": "Outland",
-      "continent": "Outland"
-    },
-    {
-      "id": 571,
-      "name": "Northrend",
-      "continent": "Northrend"
-    },
-    {
-      "id": 13,
-      "name": "Testing",
-      "continent": "Test"
-    },
-    {
-      "id": 25,
-      "name": "Scott Test",
-      "continent": "Test"
-    },
-    {
-      "id": 29,
-      "name": "CashTest",
-      "continent": "Test"
-    },
-    {
-      "id": 30,
-      "name": "Alterac Valley",
-      "continent": "Battleground"
-    },
-    {
-      "id": 37,
-      "name": "Azshara Crater",
-      "continent": "Battleground"
-    },
-    {
-      "id": 33,
-      "name": "Shadowfang Keep",
-      "continent": "Instance"
-    },
-    {
-      "id": 34,
-      "name": "Stormwind Stockade",
-      "continent": "Instance"
-    },
-    {
-      "id": 35,
-      "name": "Stormwind Vault",
-      "continent": "Instance"
-    },
-    {
-      "id": 36,
-      "name": "Deadmines",
-      "continent": "Instance"
-    },
-    {
-      "id": 43,
-      "name": "Wailing Caverns",
-      "continent": "Instance"
-    },
-    {
-      "id": 47,
-      "name": "Razorfen Kraul",
-      "continent": "Instance"
-    },
-    {
-      "id": 48,
-      "name": "Blackfathom Deeps",
-      "continent": "Instance"
-    },
-    {
-      "id": 70,
-      "name": "Uldaman",
-      "continent": "Instance"
-    },
-    {
-      "id": 90,
-      "name": "Gnomeregan",
-      "continent": "Instance"
-    },
-    {
-      "id": 109,
-      "name": "Sunken Temple",
-      "continent": "Instance"
-    },
-    {
-      "id": 129,
-      "name": "Razorfen Downs",
-      "continent": "Instance"
-    },
-    {
-      "id": 189,
-      "name": "Scarlet Monastery",
-      "continent": "Instance"
-    },
-    {
-      "id": 209,
-      "name": "Zul'Farrak",
-      "continent": "Instance"
-    },
-    {
-      "id": 229,
-      "name": "Blackrock Spire",
-      "continent": "Instance"
-    },
-    {
-      "id": 230,
-      "name": "Blackrock Depths",
-      "continent": "Instance"
-    },
-    {
-      "id": 249,
-      "name": "Onyxia's Lair",
-      "continent": "Raid"
-    },
-    {
-      "id": 269,
-      "name": "Opening of the Dark Portal",
-      "continent": "Dungeon"
-    },
-    {
-      "id": 289,
-      "name": "Scholomance",
-      "continent": "Instance"
-    },
-    {
-      "id": 309,
-      "name": "Zul'Gurub",
-      "continent": "Raid"
-    },
-    {
-      "id": 329,
-      "name": "Stratholme",
-      "continent": "Instance"
-    },
-    {
-      "id": 349,
-      "name": "Maraudon",
-      "continent": "Instance"
-    },
-    {
-      "id": 389,
-      "name": "Ragefire Chasm",
-      "continent": "Instance"
-    },
-    {
-      "id": 409,
-      "name": "Molten Core",
-      "continent": "Raid"
-    },
-    {
-      "id": 429,
-      "name": "Dire Maul",
-      "continent": "Instance"
-    },
-    {
-      "id": 469,
-      "name": "Blackwing Lair",
-      "continent": "Raid"
-    },
-    {
-      "id": 489,
-      "name": "Warsong Gulch",
-      "continent": "Battleground"
-    },
-    {
-      "id": 509,
-      "name": "Ruins of Ahn'Qiraj",
-      "continent": "Raid"
-    },
-    {
-      "id": 529,
-      "name": "Arathi Basin",
-      "continent": "Battleground"
-    },
-    {
-      "id": 531,
-      "name": "Ahn'Qiraj Temple",
-      "continent": "Raid"
-    },
-    {
-      "id": 532,
-      "name": "Karazhan",
-      "continent": "Raid"
-    },
-    {
-      "id": 533,
-      "name": "Naxxramas",
-      "continent": "Raid"
-    }
+    { "id": 0, "name": "Eastern Kingdoms", "continent": "Azeroth", "directory": "Azeroth" },
+    { "id": 1, "name": "Kalimdor", "continent": "Azeroth", "directory": "Kalimdor" },
+    { "id": 530, "name": "Outland", "continent": "Outland", "directory": "Expansion01" },
+    { "id": 571, "name": "Northrend", "continent": "Northrend", "directory": "Northrend" },
+    { "id": 13, "name": "Testing", "continent": "Test", "directory": "test" },
+    { "id": 25, "name": "Scott Test", "continent": "Test", "directory": "ScottTest" },
+    { "id": 29, "name": "CashTest", "continent": "Test", "directory": "CashTest" },
+    { "id": 30, "name": "Alterac Valley", "continent": "Battleground", "directory": "PVPZone01" },
+    { "id": 37, "name": "Azshara Crater", "continent": "Battleground", "directory": "PVPZone02" },
+    { "id": 33, "name": "Shadowfang Keep", "continent": "Instance", "directory": "ShadowfangKeep" },
+    { "id": 34, "name": "Stormwind Stockade", "continent": "Instance", "directory": "StormwindJail" },
+    { "id": 35, "name": "Stormwind Vault", "continent": "Instance", "directory": "StormwindPrison" },
+    { "id": 36, "name": "Deadmines", "continent": "Instance", "directory": "DeadMines" },
+    { "id": 43, "name": "Wailing Caverns", "continent": "Instance", "directory": "WailingCaverns" },
+    { "id": 47, "name": "Razorfen Kraul", "continent": "Instance", "directory": "RazorfenKraul" },
+    { "id": 48, "name": "Blackfathom Deeps", "continent": "Instance", "directory": "Blackfathom" },
+    { "id": 70, "name": "Uldaman", "continent": "Instance", "directory": "Uldaman" },
+    { "id": 90, "name": "Gnomeregan", "continent": "Instance", "directory": "Gnomeregan" },
+    { "id": 109, "name": "Sunken Temple", "continent": "Instance", "directory": "SunkenTemple" },
+    { "id": 129, "name": "Razorfen Downs", "continent": "Instance", "directory": "RazorfenDowns" },
+    { "id": 189, "name": "Scarlet Monastery", "continent": "Instance", "directory": "MonasteryInstances" },
+    { "id": 209, "name": "Zul'Farrak", "continent": "Instance", "directory": "TanarisInstance" },
+    { "id": 229, "name": "Blackrock Spire", "continent": "Instance", "directory": "BlackRockSpire" },
+    { "id": 230, "name": "Blackrock Depths", "continent": "Instance", "directory": "BlackrockDepths" },
+    { "id": 249, "name": "Onyxia's Lair", "continent": "Raid", "directory": "OnyxiaLairInstance" },
+    { "id": 269, "name": "Opening of the Dark Portal", "continent": "Dungeon", "directory": "CavernsOfTime" },
+    { "id": 289, "name": "Scholomance", "continent": "Instance", "directory": "Scholomance" },
+    { "id": 309, "name": "Zul'Gurub", "continent": "Raid", "directory": "ZulGurub" },
+    { "id": 329, "name": "Stratholme", "continent": "Instance", "directory": "Stratholme" },
+    { "id": 349, "name": "Maraudon", "continent": "Instance", "directory": "Maraudon" },
+    { "id": 389, "name": "Ragefire Chasm", "continent": "Instance", "directory": "OrgrimmarInstance" },
+    { "id": 409, "name": "Molten Core", "continent": "Raid", "directory": "MoltenCore" },
+    { "id": 429, "name": "Dire Maul", "continent": "Instance", "directory": "DireMaul" },
+    { "id": 469, "name": "Blackwing Lair", "continent": "Raid", "directory": "BlackwingLair" },
+    { "id": 489, "name": "Warsong Gulch", "continent": "Battleground", "directory": "PVPZone03" },
+    { "id": 509, "name": "Ruins of Ahn'Qiraj", "continent": "Raid", "directory": "AhnQiraj" },
+    { "id": 529, "name": "Arathi Basin", "continent": "Battleground", "directory": "PVPZone04" },
+    { "id": 531, "name": "Ahn'Qiraj Temple", "continent": "Raid", "directory": "AhnQirajTemple" },
+    { "id": 532, "name": "Karazhan", "continent": "Raid", "directory": "Karazhan" },
+    { "id": 533, "name": "Naxxramas", "continent": "Raid", "directory": "Naxxramas" },
+    { "id": 534, "name": "The Battle for Mount Hyjal", "continent": "Raid", "directory": "HyijaPast" },
+    { "id": 540, "name": "Hellfire Ramparts", "continent": "Instance", "directory": "HellfireRampart" },
+    { "id": 542, "name": "Blood Furnace", "continent": "Instance", "directory": "HellfireDemon" },
+    { "id": 543, "name": "Shattered Halls", "continent": "Instance", "directory": "HellfireMilitary" },
+    { "id": 544, "name": "Magtheridon's Lair", "continent": "Raid", "directory": "HellfireRaid" },
+    { "id": 545, "name": "The Steamvault", "continent": "Instance", "directory": "CoilfangPumping" },
+    { "id": 546, "name": "The Underbog", "continent": "Instance", "directory": "CoilfangMarsh" },
+    { "id": 547, "name": "The Slave Pens", "continent": "Instance", "directory": "CoilfangDraenei" },
+    { "id": 548, "name": "Serpentshrine Cavern", "continent": "Raid", "directory": "CoilfangRaid" },
+    { "id": 550, "name": "Tempest Keep", "continent": "Raid", "directory": "TempestKeepRaid" },
+    { "id": 552, "name": "The Arcatraz", "continent": "Instance", "directory": "TempestKeepArcane" },
+    { "id": 553, "name": "The Botanica", "continent": "Instance", "directory": "TempestKeepAtrium" },
+    { "id": 554, "name": "The Mechanar", "continent": "Instance", "directory": "TempestKeepFactory" },
+    { "id": 555, "name": "Shadow Labyrinth", "continent": "Instance", "directory": "AuchindounShadow" },
+    { "id": 556, "name": "Sethekk Halls", "continent": "Instance", "directory": "AuchindounDemon" },
+    { "id": 557, "name": "Mana-Tombs", "continent": "Instance", "directory": "AuchindounEthereal" },
+    { "id": 558, "name": "Auchenai Crypts", "continent": "Instance", "directory": "AuchindounDraenei" },
+    { "id": 560, "name": "Old Hillsbrad Foothills", "continent": "Instance", "directory": "HillsbradPast" },
+    { "id": 562, "name": "Blade's Edge Arena", "continent": "Arena", "directory": "PVPZone05" },
+    { "id": 564, "name": "Black Temple", "continent": "Raid", "directory": "BlackTemple" },
+    { "id": 565, "name": "Gruul's Lair", "continent": "Raid", "directory": "GruijsLair" },
+    { "id": 566, "name": "Eye of the Storm", "continent": "Battleground", "directory": "NetherstormBG" },
+    { "id": 568, "name": "Zul'Aman", "continent": "Raid", "directory": "ZulAman" },
+    { "id": 572, "name": "Ruins of Lordaeron", "continent": "Arena", "directory": "PVPLordaeron" },
+    { "id": 574, "name": "Utgarde Keep", "continent": "Instance", "directory": "UtgardeKeep" },
+    { "id": 575, "name": "Utgarde Pinnacle", "continent": "Instance", "directory": "UtgardePinnacle" },
+    { "id": 576, "name": "The Nexus", "continent": "Instance", "directory": "Nexus70" },
+    { "id": 578, "name": "The Oculus", "continent": "Instance", "directory": "Nexus80" },
+    { "id": 580, "name": "Sunwell Plateau", "continent": "Raid", "directory": "SunwellPlateau" },
+    { "id": 585, "name": "Magisters' Terrace", "continent": "Instance", "directory": "Sunwell5ManFix" },
+    { "id": 595, "name": "Culling of Stratholme", "continent": "Instance", "directory": "StratholmeCOT" },
+    { "id": 598, "name": "Sunwell Fix", "continent": "Instance", "directory": "Sunwell5Man" },
+    { "id": 599, "name": "Halls of Stone", "continent": "Instance", "directory": "Ulduar70" },
+    { "id": 600, "name": "Drak'Tharon Keep", "continent": "Instance", "directory": "DrakTheronKeep" },
+    { "id": 601, "name": "Azjol-Nerub", "continent": "Instance", "directory": "Azjol_Uppercity" },
+    { "id": 602, "name": "Halls of Lightning", "continent": "Instance", "directory": "HallsofLightning" },
+    { "id": 603, "name": "Ulduar", "continent": "Raid", "directory": "UlduarRaid" },
+    { "id": 604, "name": "Gundrak", "continent": "Instance", "directory": "GunDrak" },
+    { "id": 607, "name": "Strand of the Ancients", "continent": "Battleground", "directory": "StrandoftheAncients" },
+    { "id": 608, "name": "Violet Hold", "continent": "Instance", "directory": "DalaranPrison" },
+    { "id": 615, "name": "Obsidian Sanctum", "continent": "Raid", "directory": "ChamberOfAspectsBlack" },
+    { "id": 616, "name": "Eye of Eternity", "continent": "Raid", "directory": "NexusRaid" },
+    { "id": 617, "name": "Dalaran Sewers", "continent": "Arena", "directory": "DalaranArena" },
+    { "id": 618, "name": "Ring of Valor", "continent": "Arena", "directory": "OrgrimmarArena" },
+    { "id": 619, "name": "Ahn'kahet: The Old Kingdom", "continent": "Instance", "directory": "Azjol_LowerCity" },
+    { "id": 624, "name": "Vault of Archavon", "continent": "Raid", "directory": "WintergraspRaid" },
+    { "id": 628, "name": "Isle of Conquest", "continent": "Battleground", "directory": "IsleofConquest" },
+    { "id": 631, "name": "Icecrown Citadel", "continent": "Raid", "directory": "IcecrownCitadel" },
+    { "id": 632, "name": "The Forge of Souls", "continent": "Instance", "directory": "IcecrownCitadel5Man" },
+    { "id": 649, "name": "Trial of the Crusader", "continent": "Raid", "directory": "CrusadersColiseum" },
+    { "id": 650, "name": "Trial of the Champion", "continent": "Instance", "directory": "ArgentTournamentDungeon" },
+    { "id": 658, "name": "Pit of Saron", "continent": "Instance", "directory": "QuarryofTears" },
+    { "id": 668, "name": "Halls of Reflection", "continent": "Instance", "directory": "HallsOfReflection" },
+    { "id": 724, "name": "The Ruby Sanctum", "continent": "Raid", "directory": "ChamberOfAspectsRed" }
   ]
 }

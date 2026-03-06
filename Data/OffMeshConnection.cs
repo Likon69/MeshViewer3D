@@ -34,6 +34,7 @@ namespace MeshViewer3D.Data
         public ushort Poly;             // Index du polygone associé
         public byte Flags;              // Flags de connexion (bit 0 = bidirectional)
         public byte Side;               // Côté de la tile (0-7)
+        public uint UserId;             // User-defined ID (Detour standard, 4 bytes — complète les 36 bytes)
 
         // Extended properties (non-Detour, pour édition)
         public string Name;             // Nom optionnel pour référence

@@ -45,8 +45,8 @@ namespace MeshViewer3D.Data
         public float BvQuantFactor;     // +96  Facteur de quantization du BV tree
 
         // Constantes de validation (little-endian comme lu par BinaryReader)
-        public const uint DETOUR_MAGIC_VAND = 0x444E4156;  // "VAND" en little-endian (bytes: 56 41 4E 44)
-        public const uint DETOUR_MAGIC_DNAV = 0x5641564E;  // "DNAV" en little-endian (bytes: 4E 56 41 56)
+        public const uint DETOUR_MAGIC_DNAV = 0x444E4156;  // 'D'<<24|'N'<<16|'A'<<8|'V' = Detour NAV
+        public const uint DETOUR_MAGIC_VAND = 0x5641564E;  // Alternate magic found in some tile variants
         public const int DETOUR_VERSION = 7;
 
         /// <summary>

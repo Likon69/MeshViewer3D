@@ -38,16 +38,18 @@ namespace MeshViewer3D.Rendering
             Matrix4 invView = Matrix4.Invert(viewMatrix);
             
             // Passer de clip space à view space
-            Vector4 rayEyeNear = invProjection * rayClipNear;
-            Vector4 rayEyeFar = invProjection * rayClipFar;
+            // OpenTK 4.x stocke les matrices transposées (row-major) — utiliser Vector * Matrix
+            // pour obtenir l'opération mathématique correcte (M_standard^{-1} * v)
+            Vector4 rayEyeNear = rayClipNear * invProjection;
+            Vector4 rayEyeFar = rayClipFar * invProjection;
             
             // Diviser par w (perspective divide)
             rayEyeNear /= rayEyeNear.W;
             rayEyeFar /= rayEyeFar.W;
             
             // Passer de view space à world space
-            Vector4 rayWorldNear = invView * rayEyeNear;
-            Vector4 rayWorldFar = invView * rayEyeFar;
+            Vector4 rayWorldNear = rayEyeNear * invView;
+            Vector4 rayWorldFar = rayEyeFar * invView;
             
             // Extraire les positions 3D
             Vector3 rayOrigin = new Vector3(rayWorldNear.X, rayWorldNear.Y, rayWorldNear.Z);

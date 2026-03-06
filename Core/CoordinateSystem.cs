@@ -108,30 +108,32 @@ namespace MeshViewer3D.Core
 
         /// <summary>
         /// Extrait mapId, tileX, tileY depuis nom de fichier .mmtile
-        /// Format: MMMXXYY.mmtile (ex: 0002931.mmtile = map 0, tile 29,31)
+        /// Format: MMMYYXX.mmtile (ex: 0013933.mmtile = map 1, tileY=39, tileX=33)
+        /// Correspond à MapBuilder.cpp: sprintf("mmaps/%03u%02i%02i.mmtile", mapID, tileY, tileX)
         /// </summary>
         public static (int mapId, int tileX, int tileY) ParseTileFileName(string fileName)
         {
             // Enlever extension
             string nameWithoutExt = System.IO.Path.GetFileNameWithoutExtension(fileName);
             
-            // Vérifier longueur (7 caractères: MMM XX YY)
+            // Vérifier longueur (7 caractères: MMM YY XX)
             if (nameWithoutExt.Length != 7)
                 throw new ArgumentException($"Invalid tile filename format: {fileName}");
             
             int mapId = int.Parse(nameWithoutExt.Substring(0, 3));
-            int tileX = int.Parse(nameWithoutExt.Substring(3, 2));
-            int tileY = int.Parse(nameWithoutExt.Substring(5, 2));
+            int tileY = int.Parse(nameWithoutExt.Substring(3, 2));  // Position 3-4 = tileY
+            int tileX = int.Parse(nameWithoutExt.Substring(5, 2));  // Position 5-6 = tileX
             
             return (mapId, tileX, tileY);
         }
 
         /// <summary>
         /// Génère un nom de fichier .mmtile depuis mapId et coords tile
+        /// Format: MMMYYXX.mmtile (Y first, then X — matches MapBuilder.cpp convention)
         /// </summary>
         public static string GenerateTileFileName(int mapId, int tileX, int tileY)
         {
-            return $"{mapId:D3}{tileX:D2}{tileY:D2}.mmtile";
+            return $"{mapId:D3}{tileY:D2}{tileX:D2}.mmtile";
         }
     }
 }
