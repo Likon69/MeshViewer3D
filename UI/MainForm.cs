@@ -31,6 +31,8 @@ namespace MeshViewer3D.UI
         private Label? _overlayLabel;
         private System.Windows.Forms.Timer? _renderTimer;
         private TabControl? _editorTabs;
+        private SplitContainer? _splitMain;
+        private SplitContainer? _splitViewport;
         private BlackspotPanel? _blackspotPanel;
         private JumpLinksPanel? _jumpLinksPanel;
         private SettingsPanel? _settingsPanel;
@@ -436,35 +438,32 @@ namespace MeshViewer3D.UI
 
             // Console (en bas)
             _console = new ConsoleControl();
-            this.Controls.Add(_console);
-            _console.Log("MeshViewer3D initialized. Quality: Honorbuddy/Apoc level.");
 
             // Panel droit (minimap + tabs d'édition)
             var rightPanel = new Panel
             {
-                Dock = DockStyle.Right,
-                Width = 250,
+                Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(37, 37, 38)
             };
-            this.Controls.Add(rightPanel);
 
-            // Minimap
+            // Minimap — docked to top of right panel
             _minimap = new MinimapControl
             {
-                Location = new Point(10, 10),
-                Size = new Size(230, 150)
+                Dock = DockStyle.Top,
+                Height = 150
             };
             rightPanel.Controls.Add(_minimap);
 
-            // TabControl d'édition
+            // TabControl d'édition — fills remaining space below minimap
             _editorTabs = new TabControl
             {
-                Location = new Point(5, 170),
-                Size = new Size(240, 400),
+                Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(30, 30, 30),
                 ForeColor = Color.White
             };
             rightPanel.Controls.Add(_editorTabs);
+            // Dock.Fill must be added BEFORE Dock.Top for correct z-order
+            _editorTabs.BringToFront();
 
             // Onglet Settings (comme dans HB)
             _settingsPanel = new SettingsPanel();
@@ -517,6 +516,8 @@ namespace MeshViewer3D.UI
             _gameObjectPanel = new GameObjectPanel();
             _gameObjectPanel.WmoVisibilityChanged += v => { if (_renderer != null) _renderer.ShowWmoObjects = v; };
             _gameObjectPanel.M2VisibilityChanged += v => { if (_renderer != null) _renderer.ShowM2Objects = v; };
+            _gameObjectPanel.BakeRequested += OnBakeObjects;
+            _gameObjectPanel.UnbakeRequested += OnUnbakeObjects;
             var objectsTab = new TabPage("Objects") { BackColor = Color.FromArgb(37, 37, 38) };
             objectsTab.Controls.Add(_gameObjectPanel);
             _editorTabs.TabPages.Add(objectsTab);
@@ -555,22 +556,75 @@ namespace MeshViewer3D.UI
             _glControl.MouseMove += GlControl_MouseMove;
             _glControl.MouseUp += GlControl_MouseUp;
             _glControl.MouseWheel += GlControl_MouseWheel;
-            this.Controls.Add(_glControl);
-            _glControl.BringToFront();
+
+            // ── Layout with resizable SplitContainers ─────────────────────────
+            // splitViewport: top = GLControl, bottom = Console (horizontal splitter)
+            _splitViewport = new SplitContainer
+            {
+                Dock = DockStyle.Fill,
+                Orientation = Orientation.Horizontal,
+                BackColor = Color.FromArgb(60, 60, 60),
+                SplitterWidth = 5,
+                FixedPanel = FixedPanel.Panel2
+            };
+            _splitViewport.Panel1.Controls.Add(_glControl);
+            _splitViewport.Panel2.Controls.Add(_console);
+            _console.Dock = DockStyle.Fill;
+            _splitViewport.SplitterDistance = 500; // corrected on load
+
+            // splitMain: left = viewport+console, right = settings panel (vertical splitter)
+            _splitMain = new SplitContainer
+            {
+                Dock = DockStyle.Fill,
+                Orientation = Orientation.Vertical,
+                BackColor = Color.FromArgb(60, 60, 60),
+                SplitterWidth = 5,
+                FixedPanel = FixedPanel.Panel2
+            };
+            _splitMain.Panel1.Controls.Add(_splitViewport);
+            _splitMain.Panel2.Controls.Add(rightPanel);
+            _splitMain.SplitterDistance = 800; // corrected on load
+
+            this.Controls.Add(_splitMain);
+            _splitMain.BringToFront();
+
+            // Restore saved positions or use defaults
+            this.Load += (_, _) =>
+            {
+                if (AppSettings.SplitMainDistance > 0 && AppSettings.SplitMainDistance < _splitMain.Width - 50)
+                    _splitMain.SplitterDistance = AppSettings.SplitMainDistance;
+                else
+                    _splitMain.SplitterDistance = Math.Max(200, _splitMain.Width - 260);
+
+                if (AppSettings.SplitViewportDistance > 0 && AppSettings.SplitViewportDistance < _splitViewport.Height - 30)
+                    _splitViewport.SplitterDistance = AppSettings.SplitViewportDistance;
+                else
+                    _splitViewport.SplitterDistance = Math.Max(100, _splitViewport.Height - 120);
+            };
+
+            // Save positions on close
+            this.FormClosing += (_, _) =>
+            {
+                AppSettings.SplitMainDistance = _splitMain.SplitterDistance;
+                AppSettings.SplitViewportDistance = _splitViewport.SplitterDistance;
+                AppSettings.Save();
+            };
 
             // Overlay info - Label flottant au-dessus du GLControl (pas dedans pour éviter clignotement)
             _overlayLabel = new Label
             {
                 AutoSize = true,
-                Location = new Point(15, 45),
+                Location = new Point(15, 5),
                 BackColor = Color.FromArgb(180, 0, 0, 0),
                 ForeColor = Color.White,
                 Font = new Font("Consolas", 10),
                 Padding = new Padding(8),
                 Text = ""
             };
-            this.Controls.Add(_overlayLabel);
+            _splitViewport.Panel1.Controls.Add(_overlayLabel);
             _overlayLabel.BringToFront();
+
+            _console.Log("MeshViewer3D initialized. Quality: Honorbuddy/Apoc level.");
 
             // Timer de rendu (60 FPS)
             _renderTimer = new System.Windows.Forms.Timer
@@ -2202,6 +2256,49 @@ namespace MeshViewer3D.UI
                 _renderer?.Dispose();
             }
             base.Dispose(disposing);
+        }
+
+        // ── Bake / Unbake handlers ────────────────────────────────────────
+
+        private void OnBakeObjects()
+        {
+            if (_currentMesh == null || _renderer == null)
+            {
+                _console?.LogWarning("No mesh loaded — cannot bake.");
+                return;
+            }
+
+            var geometries = _renderer.GetObjectGeometries();
+            if (geometries.Count == 0)
+            {
+                _console?.LogWarning("No WMO/M2 objects loaded — nothing to bake.");
+                return;
+            }
+
+            var result = MeshBaker.Bake(_currentMesh, geometries);
+            _renderer.LoadMesh(_currentMesh);                      // refresh GPU buffers
+            _renderer.LoadEditableElements(_editableElements);     // keep overlays
+            _console?.LogSuccess($"Bake complete: {result.PolysMarked}/{result.PolysTotal} polys marked unwalkable ({result.TrianglesTested} tris tested)");
+        }
+
+        private void OnUnbakeObjects()
+        {
+            if (_currentMesh == null || _renderer == null)
+            {
+                _console?.LogWarning("No mesh loaded — cannot unbake.");
+                return;
+            }
+
+            int restored = MeshBaker.Unbake(_currentMesh);
+            if (restored == 0)
+            {
+                _console?.Log("Nothing to unbake — no previous bake snapshot found.");
+                return;
+            }
+
+            _renderer.LoadMesh(_currentMesh);
+            _renderer.LoadEditableElements(_editableElements);
+            _console?.LogSuccess($"Unbake complete: {restored} polys restored to original area types.");
         }
     }
 }
