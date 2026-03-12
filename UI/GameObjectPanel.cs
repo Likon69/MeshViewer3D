@@ -29,6 +29,20 @@ namespace MeshViewer3D.UI
         private Label    _lblM2Count  = null!;
         private ListBox  _listWmo = null!;
         private ListBox  _listM2  = null!;
+        private Label    _sepWmoM2 = null!;
+        private Label    _lblM2Title = null!;
+        private Label    _sepBake = null!;
+        private Button   _btnBake = null!;
+        private Button   _btnUnbake = null!;
+
+        // Fixed heights for layout calculation
+        private const int MARGIN       = 10;
+        private const int LABEL_H      = 22;
+        private const int CHECK_H      = 26;
+        private const int SEP_H        = 10;
+        private const int BTN_H        = 28;
+        private const int BTN_GAP      = 6;
+        private const int MIN_LIST_H   = 50;
 
         // ── Events ────────────────────────────────────────────────────────────
         /// <summary>Fired when the "Show WMO" checkbox changes.</summary>
@@ -37,6 +51,12 @@ namespace MeshViewer3D.UI
         /// <summary>Fired when the "Show M2" checkbox changes.</summary>
         public event Action<bool>? M2VisibilityChanged;
 
+        /// <summary>Fired when the user clicks "Bake Objects into Mesh".</summary>
+        public event Action? BakeRequested;
+
+        /// <summary>Fired when the user clicks "Unbake (Restore)".</summary>
+        public event Action? UnbakeRequested;
+
         // ── Constructor ───────────────────────────────────────────────────────
 
         public GameObjectPanel()
@@ -44,19 +64,20 @@ namespace MeshViewer3D.UI
             this.BackColor = Color.FromArgb(37, 37, 38);
             this.Dock      = DockStyle.Fill;
             SetupUI();
+            this.Resize += (_, _) => PerformLayout();
         }
 
         // ── UI setup ──────────────────────────────────────────────────────────
 
         private void SetupUI()
         {
-            int y = 10;
+            SuspendLayout();
 
             // ── WMO section ───────────────────────────────────────────────────
             var lblWmo = new Label
             {
                 Text      = "WMO Objects",
-                Location  = new Point(10, y),
+                Location  = new Point(MARGIN, MARGIN),
                 AutoSize  = true,
                 ForeColor = Color.White,
                 Font      = new Font(Font, FontStyle.Bold)
@@ -66,28 +87,26 @@ namespace MeshViewer3D.UI
             _lblWmoCount = new Label
             {
                 Text      = "(0)",
-                Location  = new Point(160, y),
+                Location  = new Point(160, MARGIN),
                 AutoSize  = true,
                 ForeColor = Color.Gray
             };
             Controls.Add(_lblWmoCount);
-            y += 22;
 
             _chkShowWmo = new CheckBox
             {
                 Text      = "Show WMO",
-                Location  = new Point(10, y),
+                Location  = new Point(MARGIN, 0), // repositioned in layout
                 Size      = new Size(215, 20),
                 ForeColor = Color.LightGray,
                 Checked   = true
             };
             _chkShowWmo.CheckedChanged += (_, _) => WmoVisibilityChanged?.Invoke(_chkShowWmo.Checked);
             Controls.Add(_chkShowWmo);
-            y += 26;
 
             _listWmo = new ListBox
             {
-                Location      = new Point(10, y),
+                Location      = new Point(MARGIN, 0),
                 Size          = new Size(215, 110),
                 BackColor     = Color.FromArgb(30, 30, 30),
                 ForeColor     = Color.White,
@@ -96,54 +115,45 @@ namespace MeshViewer3D.UI
                 IntegralHeight = false
             };
             Controls.Add(_listWmo);
-            y += 118;
 
             // ── Separator ─────────────────────────────────────────────────────
-            var sep = new Label
+            _sepWmoM2 = new Label
             {
-                Location  = new Point(10, y),
                 Size      = new Size(215, 1),
                 BackColor = Color.FromArgb(65, 65, 65)
             };
-            Controls.Add(sep);
-            y += 10;
+            Controls.Add(_sepWmoM2);
 
             // ── M2 section ────────────────────────────────────────────────────
-            var lblM2 = new Label
+            _lblM2Title = new Label
             {
                 Text      = "M2 Objects",
-                Location  = new Point(10, y),
                 AutoSize  = true,
                 ForeColor = Color.White,
                 Font      = new Font(Font, FontStyle.Bold)
             };
-            Controls.Add(lblM2);
+            Controls.Add(_lblM2Title);
 
             _lblM2Count = new Label
             {
                 Text      = "(0)",
-                Location  = new Point(160, y),
                 AutoSize  = true,
                 ForeColor = Color.Gray
             };
             Controls.Add(_lblM2Count);
-            y += 22;
 
             _chkShowM2 = new CheckBox
             {
                 Text      = "Show M2",
-                Location  = new Point(10, y),
                 Size      = new Size(215, 20),
                 ForeColor = Color.LightGray,
                 Checked   = true
             };
             _chkShowM2.CheckedChanged += (_, _) => M2VisibilityChanged?.Invoke(_chkShowM2.Checked);
             Controls.Add(_chkShowM2);
-            y += 26;
 
             _listM2 = new ListBox
             {
-                Location      = new Point(10, y),
                 Size          = new Size(215, 110),
                 BackColor     = Color.FromArgb(30, 30, 30),
                 ForeColor     = Color.White,
@@ -152,6 +162,115 @@ namespace MeshViewer3D.UI
                 IntegralHeight = false
             };
             Controls.Add(_listM2);
+
+            // ── Bake / Unbake buttons ─────────────────────────────────────────
+            _sepBake = new Label
+            {
+                Size      = new Size(215, 1),
+                BackColor = Color.FromArgb(65, 65, 65)
+            };
+            Controls.Add(_sepBake);
+
+            _btnBake = new Button
+            {
+                Text      = "Bake Objects into Mesh",
+                Size      = new Size(215, BTN_H),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(50, 50, 50),
+                ForeColor = Color.Gold,
+                Cursor    = Cursors.Hand
+            };
+            _btnBake.Click += (_, _) => BakeRequested?.Invoke();
+            Controls.Add(_btnBake);
+
+            _btnUnbake = new Button
+            {
+                Text      = "Unbake (Restore)",
+                Size      = new Size(215, BTN_H),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(50, 50, 50),
+                ForeColor = Color.Gray,
+                Cursor    = Cursors.Hand
+            };
+            _btnUnbake.Click += (_, _) => UnbakeRequested?.Invoke();
+            Controls.Add(_btnUnbake);
+
+            ResumeLayout(false);
+        }
+
+        // ── Dynamic layout ────────────────────────────────────────────────────
+
+        protected override void OnLayout(LayoutEventArgs e)
+        {
+            base.OnLayout(e);
+            DoLayout();
+        }
+
+        private void DoLayout()
+        {
+            int w = ClientSize.Width - MARGIN * 2;
+            if (w < 60) w = 60;
+            int h = ClientSize.Height;
+
+            // Fixed vertical space consumed by labels, checkboxes, separators, buttons
+            int fixedH = MARGIN          // top margin
+                       + LABEL_H         // WMO label
+                       + CHECK_H         // Show WMO checkbox
+                       + 8               // gap after WMO list
+                       + SEP_H           // separator
+                       + LABEL_H         // M2 label
+                       + CHECK_H         // Show M2 checkbox
+                       + 8               // gap after M2 list
+                       + SEP_H           // bake separator
+                       + BTN_H + BTN_GAP // bake button
+                       + BTN_H + MARGIN; // unbake button + bottom margin
+
+            int availableForLists = h - fixedH;
+            int listH = Math.Max(MIN_LIST_H, availableForLists / 2);
+
+            int y = MARGIN;
+
+            // WMO label row
+            _lblWmoCount.Location = new Point(160, y);
+            y += LABEL_H;
+
+            // Show WMO checkbox
+            _chkShowWmo.Location = new Point(MARGIN, y);
+            _chkShowWmo.Width = w;
+            y += CHECK_H;
+
+            // WMO listbox
+            _listWmo.SetBounds(MARGIN, y, w, listH);
+            y += listH + 8;
+
+            // Separator
+            _sepWmoM2.SetBounds(MARGIN, y, w, 1);
+            y += SEP_H;
+
+            // M2 label row
+            _lblM2Title.Location = new Point(MARGIN, y);
+            _lblM2Count.Location = new Point(160, y);
+            y += LABEL_H;
+
+            // Show M2 checkbox
+            _chkShowM2.Location = new Point(MARGIN, y);
+            _chkShowM2.Width = w;
+            y += CHECK_H;
+
+            // M2 listbox
+            _listM2.SetBounds(MARGIN, y, w, listH);
+            y += listH + 8;
+
+            // Bake separator
+            _sepBake.SetBounds(MARGIN, y, w, 1);
+            y += SEP_H;
+
+            // Bake button
+            _btnBake.SetBounds(MARGIN, y, w, BTN_H);
+            y += BTN_H + BTN_GAP;
+
+            // Unbake button
+            _btnUnbake.SetBounds(MARGIN, y, w, BTN_H);
         }
 
         // ── Public API ────────────────────────────────────────────────────────
