@@ -10,6 +10,8 @@ namespace MeshViewer3D.Core
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "settings.json");
 
         public static string? WowDataPath { get; set; }
+        public static int SplitMainDistance { get; set; } = -1;
+        public static int SplitViewportDistance { get; set; } = -1;
 
         public static void Load()
         {
@@ -20,6 +22,8 @@ namespace MeshViewer3D.Core
                 string json = File.ReadAllText(SettingsPath);
                 var obj = JObject.Parse(json);
                 WowDataPath = obj.Value<string>("wowDataPath");
+                SplitMainDistance = obj.Value<int?>("splitMainDistance") ?? -1;
+                SplitViewportDistance = obj.Value<int?>("splitViewportDistance") ?? -1;
             }
             catch
             {
@@ -31,7 +35,9 @@ namespace MeshViewer3D.Core
         {
             var obj = new JObject
             {
-                ["wowDataPath"] = WowDataPath
+                ["wowDataPath"] = WowDataPath,
+                ["splitMainDistance"] = SplitMainDistance,
+                ["splitViewportDistance"] = SplitViewportDistance
             };
             File.WriteAllText(SettingsPath, obj.ToString(Newtonsoft.Json.Formatting.Indented));
         }
