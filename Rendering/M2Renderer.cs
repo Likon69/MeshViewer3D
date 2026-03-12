@@ -31,8 +31,20 @@ namespace MeshViewer3D.Rendering
         private int _ebo;
         private int _indexCount;
 
+        // ── CPU-side transformed geometry (for bake intersection testing) ─────
+        private OpenTK.Mathematics.Vector3[] _recastTriangles = Array.Empty<OpenTK.Mathematics.Vector3>();
+
         // ── Visual state ──────────────────────────────────────────────────────
         public bool ShowWireframe { get; set; }
+
+        /// <summary>Display name (filename only) of this M2, used for bake logging.</summary>
+        public string Name { get; set; } = "";
+
+        /// <summary>
+        /// Returns the transformed triangles in Recast space (3 vertices per triangle).
+        /// Used by MeshBaker for intersection testing.
+        /// </summary>
+        public OpenTK.Mathematics.Vector3[] GetRecastTriangles() => _recastTriangles;
 
         // M2 solid colour: red for trees/spikes/doodads (HB style)
         private const float CR = 0.85f;
@@ -130,6 +142,26 @@ namespace MeshViewer3D.Rendering
 
             GL.BindVertexArray(0);
             _indexCount = indices.Length;
+
+            // Retain CPU-side Recast-space triangles for MeshBaker
+            _recastTriangles = BuildRecastTriangles(vertexData, indices);
+        }
+
+        /// <summary>
+        /// Extracts Recast-space triangle positions from the interleaved vertex data + index array.
+        /// Vertex layout: [x,y,z,r,g,b] (6 floats per vertex).
+        /// </summary>
+        private static OpenTK.Mathematics.Vector3[] BuildRecastTriangles(float[] vertexData, uint[] indices)
+        {
+            if (indices.Length < 3) return Array.Empty<OpenTK.Mathematics.Vector3>();
+
+            var tris = new OpenTK.Mathematics.Vector3[indices.Length];
+            for (int i = 0; i < indices.Length; i++)
+            {
+                int vBase = (int)indices[i] * 6; // 6 floats per vertex
+                tris[i] = new OpenTK.Mathematics.Vector3(vertexData[vBase], vertexData[vBase + 1], vertexData[vBase + 2]);
+            }
+            return tris;
         }
 
         /// <summary>
