@@ -82,3 +82,5 @@ desktop.ini
 
 # Rider
 .idea/
+*.code-workspace
+UI/MainForm.resx
