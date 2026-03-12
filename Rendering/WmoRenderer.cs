@@ -43,11 +43,20 @@ namespace MeshViewer3D.Rendering
         private int _ebo;
         private int _indexCount;
 
+        // ── CPU-side transformed geometry (for bake intersection testing) ─────
+        private OpenTK.Mathematics.Vector3[] _recastTriangles = Array.Empty<OpenTK.Mathematics.Vector3>();
+
         // ── Visual state ──────────────────────────────────────────────────────
         public bool ShowWireframe { get; set; }
 
         /// <summary>Display name (filename only) of this WMO, used for blacklist matching.</summary>
         public string Name { get; set; } = "";
+
+        /// <summary>
+        /// Returns the transformed triangles in Recast space (3 vertices per triangle).
+        /// Used by MeshBaker for intersection testing.
+        /// </summary>
+        public OpenTK.Mathematics.Vector3[] GetRecastTriangles() => _recastTriangles;
 
         // WMO solid colour: yellow for buildings (HB style)
         private const float CR = 0.90f;
@@ -134,6 +143,9 @@ namespace MeshViewer3D.Rendering
                 baseVertex += (uint)geo.VertexCount;
             }
 
+            // Retain CPU-side Recast-space triangles for MeshBaker
+            _recastTriangles = BuildRecastTriangles(vertexData, indices);
+
             if (vertexData.Count == 0 || indices.Count == 0)
             {
                 _indexCount = 0;
@@ -185,6 +197,23 @@ namespace MeshViewer3D.Rendering
                 {  sx*sy*cz - cx*sz,    sx*sy*sz + cx*cz,    sx*cy },
                 {  cx*sy*cz + sx*sz,    cx*sy*sz - sx*cz,    cx*cy }
             };
+        }
+
+        /// <summary>
+        /// Extracts Recast-space triangle positions from the interleaved vertex data + index list.
+        /// Vertex layout: [x,y,z,r,g,b] (6 floats per vertex).
+        /// </summary>
+        private static OpenTK.Mathematics.Vector3[] BuildRecastTriangles(List<float> vertexData, List<uint> indices)
+        {
+            if (indices.Count < 3) return Array.Empty<OpenTK.Mathematics.Vector3>();
+
+            var tris = new OpenTK.Mathematics.Vector3[indices.Count];
+            for (int i = 0; i < indices.Count; i++)
+            {
+                int vBase = (int)indices[i] * 6; // 6 floats per vertex
+                tris[i] = new OpenTK.Mathematics.Vector3(vertexData[vBase], vertexData[vBase + 1], vertexData[vBase + 2]);
+            }
+            return tris;
         }
 
         // ── Rendering ─────────────────────────────────────────────────────────
