@@ -1096,6 +1096,32 @@ namespace MeshViewer3D.Rendering
         }
 
         /// <summary>
+        /// Collects all loaded WMO/M2 object geometries in Recast space.
+        /// Used by MeshBaker to test polygon intersection before marking as Unwalkable.
+        /// </summary>
+        public List<Core.ObjectGeometry> GetObjectGeometries()
+        {
+            var result = new List<Core.ObjectGeometry>();
+
+            foreach (var wmo in _wmoRenderers)
+            {
+                if (_wmoBlacklist.Contains(wmo.Name)) continue;
+                var tris = wmo.GetRecastTriangles();
+                if (tris.Length > 0)
+                    result.Add(new Core.ObjectGeometry(wmo.Name, tris));
+            }
+
+            foreach (var m2 in _m2Renderers)
+            {
+                var tris = m2.GetRecastTriangles();
+                if (tris.Length > 0)
+                    result.Add(new Core.ObjectGeometry(m2.Name, tris));
+            }
+
+            return result;
+        }
+
+        /// <summary>
         /// Loads WMO objects from an ADT tile using the WoW data provider.
         /// Replaces any previously loaded WMO renderers.
         /// </summary>
@@ -1234,6 +1260,7 @@ namespace MeshViewer3D.Rendering
                 Console.WriteLine($"  M2: parsed OK — {m2File.VertexCount} bounding verts, {m2File.TriangleCount} bounding tris");
 
                 var renderer = new M2Renderer();
+                renderer.Name = Path.GetFileName(m2Path) ?? m2Path;
                 renderer.LoadGeometry(m2File, mddf);
                 _m2Renderers.Add(renderer);
                 Console.WriteLine($"  M2 OK: '{m2Path}' — renderer added");
