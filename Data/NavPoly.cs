@@ -75,7 +75,7 @@ namespace MeshViewer3D.Data
     /// </summary>
     public struct NavLink
     {
-        public uint Ref;                // Reference du polygon lié (tile + poly index)
+        public ulong Ref;               // Reference du polygon lié (dtPolyRef = uint64 with DT_POLYREF64)
         public uint Next;               // Index du prochain lien dans la liste
         public byte Edge;               // Index de l'edge du polygon
         public byte Side;               // Côté de la tile (0-7: interne, N, E, S, W, NE, SE, SW, NW)

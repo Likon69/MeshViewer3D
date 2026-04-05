@@ -393,6 +393,9 @@ namespace MeshViewer3D.UI
             meshMenu.DropDownItems.Add(new ToolStripSeparator());
             meshMenu.DropDownItems.Add("Load Volumes...", null, OnLoadVolumes);
             meshMenu.DropDownItems.Add("Save Volumes...", null, OnSaveVolumes);
+            meshMenu.DropDownItems.Add(new ToolStripSeparator());
+            meshMenu.DropDownItems.Add("Bake Blackspots into Tile", null, OnBakeBlackspots);
+            meshMenu.DropDownItems.Add("Save Modified Tile (.mmtile)...", null, OnSaveModifiedTile);
             menuStrip.Items.Add(meshMenu);
 
             // Menu Tools
@@ -1855,6 +1858,66 @@ namespace MeshViewer3D.UI
                     MessageBox.Show($"Error saving volumes:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 }
             }
+        }
+
+        private void OnSaveModifiedTile(object? sender, EventArgs e)
+        {
+            if (_currentMesh == null)
+            {
+                MessageBox.Show("No tile loaded.", "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Default filename matches extractor convention: MMMYYxx.mmtile
+            string defaultName = Path.GetFileName(_currentMesh.FilePath);
+            if (string.IsNullOrEmpty(defaultName))
+                defaultName = $"{_currentMesh.MapId:D3}{_currentMesh.TileY:D2}{_currentMesh.TileX:D2}.mmtile";
+
+            using var dialog = new SaveFileDialog
+            {
+                Filter = "MMTile Files (*.mmtile)|*.mmtile|All Files (*.*)|*.*",
+                Title = "Save Modified Tile",
+                DefaultExt = "mmtile",
+                FileName = defaultName,
+                InitialDirectory = Path.GetDirectoryName(_currentMesh.FilePath)
+                    ?? Environment.GetFolderPath(Environment.SpecialFolder.Desktop)
+            };
+
+            if (dialog.ShowDialog() == DialogResult.OK)
+            {
+                try
+                {
+                    Core.MmtileWriter.Save(_currentMesh, dialog.FileName);
+
+                    // Verify round-trip: compare file size with expected
+                    var fi = new FileInfo(dialog.FileName);
+                    _console?.LogSuccess($"Saved modified tile to {Path.GetFileName(dialog.FileName)} ({fi.Length:N0} bytes)");
+                }
+                catch (Exception ex)
+                {
+                    _console?.LogError($"Failed to save tile: {ex.Message}");
+                    MessageBox.Show($"Error saving tile:\n{ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void OnBakeBlackspots(object? sender, EventArgs e)
+        {
+            if (_currentMesh == null || _renderer == null)
+            {
+                _console?.LogWarning("No mesh loaded — cannot bake blackspots.");
+                return;
+            }
+            if (_editableElements.Blackspots.Count == 0)
+            {
+                _console?.LogWarning("No blackspots placed — nothing to bake. Use B + click to place blackspots first.");
+                return;
+            }
+
+            var result = MeshBaker.BakeBlackspots(_currentMesh, _editableElements.Blackspots);
+            _renderer.LoadMesh(_currentMesh);
+            _renderer.LoadEditableElements(_editableElements);
+            _console?.LogSuccess($"Bake blackspots: {result.PolysMarked}/{result.PolysTotal} polys marked unwalkable ({_editableElements.Blackspots.Count} blackspots)");
         }
 
         // ========== Toolbar handlers (HB conformity) ==========

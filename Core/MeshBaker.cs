@@ -173,6 +173,60 @@ namespace MeshViewer3D.Core
         }
 
         /// <summary>
+        /// Bakes blackspot markers into the navmesh by marking polys within each
+        /// blackspot's cylinder as AREA_UNWALKABLE. Tests poly centroid against
+        /// cylinder (XZ distance ≤ radius, Y within height range).
+        /// </summary>
+        public static BakeResult BakeBlackspots(NavMeshData mesh, IReadOnlyList<Data.Blackspot> blackspots)
+        {
+            if (mesh == null) throw new ArgumentNullException(nameof(mesh));
+            if (blackspots == null || blackspots.Count == 0)
+                return new BakeResult(0, mesh.Polys.Length, 0);
+
+            // Save original area types before first bake
+            if (_savedAreaTypes == null)
+            {
+                _savedAreaTypes = new byte[mesh.Polys.Length];
+                for (int i = 0; i < mesh.Polys.Length; i++)
+                    _savedAreaTypes[i] = mesh.Polys[i].AreaAndType;
+            }
+
+            int totalMarked = 0;
+
+            for (int pi = 0; pi < mesh.Polys.Length; pi++)
+            {
+                var poly = mesh.Polys[pi];
+                if (poly.Area == AREA_UNWALKABLE) continue;
+                if (poly.Type != 0) continue;
+                if (poly.VertCount < 3) continue;
+
+                var centroid = ComputeCentroid(mesh.Vertices, poly);
+
+                for (int bi = 0; bi < blackspots.Count; bi++)
+                {
+                    var bs = blackspots[bi];
+                    // XZ distance check (cylinder radius)
+                    float dx = centroid.X - bs.Location.X;
+                    float dz = centroid.Z - bs.Location.Z;
+                    float distSq = dx * dx + dz * dz;
+                    if (distSq > bs.Radius * bs.Radius) continue;
+
+                    // Y range check (cylinder height centered on blackspot Y)
+                    float halfH = bs.Height * 0.5f;
+                    if (centroid.Y < bs.Location.Y - halfH - VERTICAL_TOLERANCE ||
+                        centroid.Y > bs.Location.Y + halfH + VERTICAL_TOLERANCE)
+                        continue;
+
+                    mesh.Polys[pi].AreaAndType = (byte)((mesh.Polys[pi].AreaAndType & 0xC0) | AREA_UNWALKABLE);
+                    totalMarked++;
+                    break; // poly already marked, next poly
+                }
+            }
+
+            return new BakeResult(totalMarked, mesh.Polys.Length, blackspots.Count);
+        }
+
+        /// <summary>
         /// Restores all polygons to their original area types from before the bake.
         /// If no bake was performed, does nothing.
         /// </summary>

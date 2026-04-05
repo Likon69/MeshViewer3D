@@ -200,7 +200,7 @@ namespace MeshViewer3D.Core
         }
 
         /// <summary>
-        /// Lit les liens entre polygones (8 bytes par link)
+        /// Lit les liens entre polygones (16 bytes par link avec DT_POLYREF64)
         /// </summary>
         private static NavLink[] ReadLinks(BinaryReader br, int count)
         {
@@ -209,7 +209,7 @@ namespace MeshViewer3D.Core
             {
                 links[i] = new NavLink
                 {
-                    Ref = br.ReadUInt32(),
+                    Ref = br.ReadUInt64(),
                     Next = br.ReadUInt32(),
                     Edge = br.ReadByte(),
                     Side = br.ReadByte(),
