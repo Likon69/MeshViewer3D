@@ -1187,6 +1187,9 @@ namespace MeshViewer3D.Rendering
         /// </summary>
         public void LoadWorldObjects(WowDataProvider dataProvider, AdtFile adt)
         {
+            Vector3? meshCenter = _currentMesh?.GetCenterDetour();
+            const float placementSwitchThreshold = 1800f;
+
             // Clear old renderers
             foreach (var r in _wmoRenderers) r.Dispose();
             _wmoRenderers.Clear();
@@ -1262,7 +1265,38 @@ namespace MeshViewer3D.Rendering
 
                 var renderer = new WmoRenderer();
                 renderer.Name = Path.GetFileName(rootPath) ?? rootPath;
-                renderer.LoadGeometry(groups, modf);
+                renderer.LoadGeometry(groups, modf, useDirectWowPlacement: false);
+
+                if (meshCenter.HasValue && TryComputeCenter(renderer.GetRecastTriangles(), out var legacyCenter))
+                {
+                    float legacyDist = (legacyCenter - meshCenter.Value).Length;
+                    if (legacyDist > placementSwitchThreshold)
+                    {
+                        var alt = new WmoRenderer();
+                        alt.Name = renderer.Name;
+                        alt.LoadGeometry(groups, modf, useDirectWowPlacement: true);
+
+                        if (TryComputeCenter(alt.GetRecastTriangles(), out var directCenter))
+                        {
+                            float directDist = (directCenter - meshCenter.Value).Length;
+                            if (directDist + 100f < legacyDist)
+                            {
+                                renderer.Dispose();
+                                renderer = alt;
+                                Console.WriteLine($"  WMO placement switch -> direct mode (legacyDist={legacyDist:F1}, directDist={directDist:F1}): {rootPath}");
+                            }
+                            else
+                            {
+                                alt.Dispose();
+                            }
+                        }
+                        else
+                        {
+                            alt.Dispose();
+                        }
+                    }
+                }
+
                 _wmoRenderers.Add(renderer);
                 Console.WriteLine($"  WMO OK: '{rootPath}' — {groups.Count} groups loaded, renderer added");
             }
@@ -1321,11 +1355,56 @@ namespace MeshViewer3D.Rendering
 
                 var renderer = new M2Renderer();
                 renderer.Name = Path.GetFileName(m2Path) ?? m2Path;
-                renderer.LoadGeometry(m2File, mddf);
+                renderer.LoadGeometry(m2File, mddf, useDirectWowPlacement: false);
+
+                if (meshCenter.HasValue && TryComputeCenter(renderer.GetRecastTriangles(), out var legacyCenter))
+                {
+                    float legacyDist = (legacyCenter - meshCenter.Value).Length;
+                    if (legacyDist > placementSwitchThreshold)
+                    {
+                        var alt = new M2Renderer();
+                        alt.Name = renderer.Name;
+                        alt.LoadGeometry(m2File, mddf, useDirectWowPlacement: true);
+
+                        if (TryComputeCenter(alt.GetRecastTriangles(), out var directCenter))
+                        {
+                            float directDist = (directCenter - meshCenter.Value).Length;
+                            if (directDist + 100f < legacyDist)
+                            {
+                                renderer.Dispose();
+                                renderer = alt;
+                                Console.WriteLine($"  M2 placement switch -> direct mode (legacyDist={legacyDist:F1}, directDist={directDist:F1}): {m2Path}");
+                            }
+                            else
+                            {
+                                alt.Dispose();
+                            }
+                        }
+                        else
+                        {
+                            alt.Dispose();
+                        }
+                    }
+                }
+
                 _m2Renderers.Add(renderer);
                 Console.WriteLine($"  M2 OK: '{m2Path}' — renderer added");
             }
             Console.WriteLine($"  M2 TOTAL: {_m2Renderers.Count} renderers created");
+        }
+
+        private static bool TryComputeCenter(Vector3[] triangles, out Vector3 center)
+        {
+            center = Vector3.Zero;
+            if (triangles == null || triangles.Length == 0)
+                return false;
+
+            Vector3 sum = Vector3.Zero;
+            for (int i = 0; i < triangles.Length; i++)
+                sum += triangles[i];
+
+            center = sum / triangles.Length;
+            return true;
         }
 
         /// <summary>

@@ -23,6 +23,7 @@ using System;
 using System.Collections.Generic;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
+using MeshViewer3D.Core;
 using MeshViewer3D.Core.Formats.Adt;
 using MeshViewer3D.Core.Formats.Wmo;
 
@@ -74,7 +75,7 @@ namespace MeshViewer3D.Rendering
         ///   TerrainBuilder: fromEulerAnglesXYZ(-rz,-rx,-ry), position-=32*GRID,
         ///                   transform(v*rot*scale+pos, mirror x/y), copyVertices(y,z,x)
         /// </summary>
-        public void LoadGeometry(IEnumerable<WmoGroup> groups, MODF modf)
+        public void LoadGeometry(IEnumerable<WmoGroup> groups, MODF modf, bool useDirectWowPlacement = false)
         {
             // ── Build G3D rotation matrix (row-vector convention) ──────────
             // MaNGOS TerrainBuilder.cpp line 723:
@@ -109,21 +110,35 @@ namespace MeshViewer3D.Rendering
                     float ly = geo.Vertices[i + 1];
                     float lz = geo.Vertices[i + 2];
 
-                    // G3D row-vector * rotation * scale + position
-                    // TerrainBuilder::transform line 844: v = (*it) * rotation * scale + position
-                    float rx = (lx * rot[0,0] + ly * rot[1,0] + lz * rot[2,0]) * scale + gPosX;
-                    float ry = (lx * rot[0,1] + ly * rot[1,1] + lz * rot[2,1]) * scale + gPosY;
-                    float rz = (lx * rot[0,2] + ly * rot[1,2] + lz * rot[2,2]) * scale + gPosZ;
+                    float recastX;
+                    float recastY;
+                    float recastZ;
 
-                    // Mirror: v.x *= -1; v.y *= -1  (TerrainBuilder::transform line 845-846)
-                    rx = -rx;
-                    ry = -ry;
-                    // rz unchanged
+                    if (useDirectWowPlacement)
+                    {
+                        // Direct path: MODF position interpreted as WoW world coordinates.
+                        float wowX = (lx * rot[0,0] + ly * rot[1,0] + lz * rot[2,0]) * scale + modf.posX;
+                        float wowY = (lx * rot[0,1] + ly * rot[1,1] + lz * rot[2,1]) * scale + modf.posY;
+                        float wowZ = (lx * rot[0,2] + ly * rot[1,2] + lz * rot[2,2]) * scale + modf.posZ;
+                        var detour = CoordinateSystem.WowToDetour(new Vector3(wowX, wowY, wowZ));
+                        recastX = detour.X;
+                        recastY = detour.Y;
+                        recastZ = detour.Z;
+                    }
+                    else
+                    {
+                        // Legacy extractor path preserved for compatibility with existing generated data.
+                        float rx = (lx * rot[0,0] + ly * rot[1,0] + lz * rot[2,0]) * scale + gPosX;
+                        float ry = (lx * rot[0,1] + ly * rot[1,1] + lz * rot[2,1]) * scale + gPosY;
+                        float rz = (lx * rot[0,2] + ly * rot[1,2] + lz * rot[2,2]) * scale + gPosZ;
 
-                    // copyVertices: dest = (v.y, v.z, v.x)  → Recast (X, Y=height, Z)
-                    float recastX = ry;
-                    float recastY = rz;  // height
-                    float recastZ = rx;
+                        rx = -rx;
+                        ry = -ry;
+
+                        recastX = ry;
+                        recastY = rz;
+                        recastZ = rx;
+                    }
 
                     vertexData.Add(recastX);
                     vertexData.Add(recastY);
