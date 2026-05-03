@@ -1323,8 +1323,8 @@ namespace MeshViewer3D.UI
 
             if (_pressedKeys.Contains(Keys.W)) forward += 1f;
             if (_pressedKeys.Contains(Keys.S)) forward -= 1f;
-            if (_pressedKeys.Contains(Keys.D)) right += 1f;
-            if (_pressedKeys.Contains(Keys.A)) right -= 1f;
+            if (_pressedKeys.Contains(Keys.D)) right -= 1f;
+            if (_pressedKeys.Contains(Keys.A)) right += 1f;
             if (_pressedKeys.Contains(Keys.E)) up += 1f;
             if (_pressedKeys.Contains(Keys.Q)) up -= 1f;
 
