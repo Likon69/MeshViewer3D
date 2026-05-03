@@ -10,6 +10,7 @@ using OpenTK.Mathematics;
 using MeshViewer3D.Core;
 using MeshViewer3D.Core.Mpq;
 using MeshViewer3D.Core.Formats.Adt;
+using MeshViewer3D.Core.Formats.Wdt;
 using MeshViewer3D.Rendering;
 
 namespace MeshViewer3D.UI
@@ -354,6 +355,9 @@ namespace MeshViewer3D.UI
             mapMenu.DropDownItems.Add("Load Tile...", null, OnLoadTile);
             mapMenu.DropDownItems.Add("Load Folder...", null, OnLoadFolder);
             mapMenu.DropDownItems.Add(new ToolStripSeparator());
+            mapMenu.DropDownItems.Add("Load WDT (Tile Grid)...", null, OnLoadWdt);
+            mapMenu.DropDownItems.Add("Load Terrain from ADT...", null, OnLoadTerrain);
+            mapMenu.DropDownItems.Add(new ToolStripSeparator());
             mapMenu.DropDownItems.Add("Set WoW Data Folder...", null, OnSetWowDataFolder);
             mapMenu.DropDownItems.Add(new ToolStripSeparator());
             mapMenu.DropDownItems.Add("Close Tile", null, OnCloseTile);
@@ -470,12 +474,14 @@ namespace MeshViewer3D.UI
 
             // Onglet Settings (comme dans HB)
             _settingsPanel = new SettingsPanel();
-            _settingsPanel.WireframeChanged += (s, e) => { if (_renderer != null) _renderer.ShowWireframe = e; };
-            _settingsPanel.LightingChanged += (s, e) => { if (_renderer != null) _renderer.EnableLighting = e; };
-            _settingsPanel.OffMeshChanged += (s, e) => { if (_renderer != null) _renderer.ShowOffMesh = e; };
-            _settingsPanel.BlackspotsChanged += (s, e) => { if (_renderer != null) _renderer.ShowBlackspots = e; };
-            _settingsPanel.VolumesChanged += (s, e) => { if (_renderer != null) _renderer.ShowVolumes = e; };
-            _settingsPanel.ColorModeChanged += (s, mode) => { if (_renderer != null) _renderer.ColorMode = mode; _console?.Log($"Color mode: {mode}"); };
+            _settingsPanel.WireframeChanged   += (s, e) => { if (_renderer != null) _renderer.ShowWireframe    = e; };
+            _settingsPanel.NavMeshFillChanged += (s, e) => { if (_renderer != null) _renderer.ShowNavMeshFill  = e; };
+            _settingsPanel.LightingChanged    += (s, e) => { if (_renderer != null) _renderer.EnableLighting   = e; };
+            _settingsPanel.OffMeshChanged     += (s, e) => { if (_renderer != null) _renderer.ShowOffMesh      = e; };
+            _settingsPanel.BlackspotsChanged  += (s, e) => { if (_renderer != null) _renderer.ShowBlackspots   = e; };
+            _settingsPanel.VolumesChanged     += (s, e) => { if (_renderer != null) _renderer.ShowVolumes      = e; };
+            _settingsPanel.TerrainChanged     += (s, e) => { if (_renderer != null) _renderer.ShowTerrain      = e; };
+            _settingsPanel.ColorModeChanged   += (s, mode) => { if (_renderer != null) _renderer.ColorMode = mode; _console?.Log($"Color mode: {mode}"); };
             var settingsTab = new TabPage("Settings") { BackColor = Color.FromArgb(37, 37, 38) };
             settingsTab.Controls.Add(_settingsPanel);
             _editorTabs.TabPages.Add(settingsTab);
@@ -659,6 +665,7 @@ namespace MeshViewer3D.UI
                 AppDomain.CurrentDomain.BaseDirectory, "Resources");
             
             _renderer = new NavMeshRenderer();
+            _renderer.SetLogCallback(msg => _console?.Log(msg));
             _renderer.Initialize(resourcePath);
             _renderer.LoadEditableElements(_editableElements);
 
@@ -1007,10 +1014,15 @@ namespace MeshViewer3D.UI
                 }
 
                 var adt = AdtFile.Load(adtBytes);
+                adt.TileX = _currentMesh.TileX;
+                adt.TileY = _currentMesh.TileY;
                 _gameObjectPanel?.LoadObjects(adt);
                 _wmoBlacklistPanel?.LoadWmoNames(adt.WmoNames);
                 _perModelPanel?.LoadModelNames(adt.WmoNames, adt.M2Names);
                 _renderer.LoadWorldObjects(provider, adt);
+
+                // Auto-load terrain for the current tile only.
+                _renderer.LoadTerrain(adt, provider, mapDir, includeAdjacentTiles: false);
 
                 int wmoCount = adt.WmoInstances.Length;
                 _console?.LogSuccess($"Loaded {wmoCount} WMO placements from ADT");
@@ -1027,9 +1039,169 @@ namespace MeshViewer3D.UI
         /// </summary>
         private static string? GetMapDirectory(int mapId) => MapDatabase.GetDirectory(mapId);
 
+        // ────────────────────────────────────────────────────────────────────
+        //  WDT tile grid loading
+        // ────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Loads a WDT file to populate the minimap with the tile existence grid.
+        /// Shows which ADT tiles exist for the selected map.
+        /// </summary>
+        private void OnLoadWdt(object? sender, EventArgs e)
+        {
+            if (_wowDataPath == null)
+            {
+                _console?.LogWarning("Set the WoW Data folder first (Map > Set WoW Data Folder)");
+                MessageBox.Show("Please set the WoW Data folder first.\nMap > Set WoW Data Folder",
+                    "WoW Data Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            // Prompt for map ID
+            string? input = ShowInputDialog("Load WDT Tile Grid", "Enter Map ID:\n(e.g. 0=Eastern Kingdoms, 1=Kalimdor, 571=Northrend)", "0");
+            if (string.IsNullOrEmpty(input) || !int.TryParse(input, out int mapId))
+                return;
+
+            string? mapDir = GetMapDirectory(mapId);
+            if (mapDir == null)
+            {
+                _console?.LogError($"Unknown map ID {mapId} — not found in Maps.json");
+                return;
+            }
+
+            string wdtPath = $"World\\Maps\\{mapDir}\\{mapDir}.wdt";
+            _console?.Log($"Loading WDT: {wdtPath}...");
+
+            try
+            {
+                using var provider = WowDataProvider.Open(_wowDataPath);
+                byte[]? wdtBytes = provider.GetFileBytes(wdtPath);
+                if (wdtBytes == null)
+                {
+                    _console?.LogError($"WDT not found in MPQ: {wdtPath}");
+                    return;
+                }
+
+                var wdt = WdtFile.Load(wdtBytes);
+                int tileCount = wdt.TileCount;
+
+                // Update minimap with tile grid
+                _minimap?.Clear();
+                foreach (var (tileX, tileY) in wdt.GetExistingTiles())
+                    _minimap?.SetTileLoaded(tileX, tileY, true);
+
+                string? mapName = MapDatabase.GetName(mapId);
+                _console?.LogSuccess($"WDT loaded: {mapName ?? mapDir} — {tileCount} tiles exist out of 4096 (64×64 grid)");
+
+                if (wdt.IsGlobalWmo)
+                    _console?.LogWarning("  This map is a global WMO dungeon (single WMO file, no terrain)");
+            }
+            catch (Exception ex)
+            {
+                _console?.LogError($"Failed to load WDT: {ex.Message}");
+            }
+        }
+
+        // ────────────────────────────────────────────────────────────────────
+        //  Terrain heightmap loading
+        // ────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Loads terrain heightmap from the ADT file for the currently loaded tile.
+        /// Requires WoW data path and a loaded .mmtile.
+        /// </summary>
+        private void OnLoadTerrain(object? sender, EventArgs e)
+        {
+            if (_wowDataPath == null)
+            {
+                _console?.LogWarning("Set the WoW Data folder first (Map > Set WoW Data Folder)");
+                return;
+            }
+
+            if (_currentMesh == null || _renderer == null)
+            {
+                _console?.LogWarning("Load a .mmtile first to identify the ADT file");
+                return;
+            }
+
+            string? mapDir = GetMapDirectory(_currentMesh.MapId);
+            if (mapDir == null)
+            {
+                _console?.LogError($"Unknown map ID {_currentMesh.MapId}");
+                return;
+            }
+
+            string adtPath = $"World\\Maps\\{mapDir}\\{mapDir}_{_currentMesh.TileX}_{_currentMesh.TileY}.adt";
+            _console?.Log($"Loading terrain from ADT: {adtPath}...");
+
+            try
+            {
+                using var provider = WowDataProvider.Open(_wowDataPath);
+                byte[]? adtBytes = provider.GetFileBytes(adtPath);
+                if (adtBytes == null)
+                {
+                    _console?.LogError($"ADT not found in MPQ: {adtPath}");
+                    return;
+                }
+
+                var adt = AdtFile.Load(adtBytes);
+                adt.TileX = _currentMesh.TileX;
+                adt.TileY = _currentMesh.TileY;
+
+                // Count terrain chunks
+                int chunkCount = 0;
+                for (int i = 0; i < adt.TerrainChunks.Length; i++)
+                    if (adt.TerrainChunks[i] != null) chunkCount++;
+
+                _console?.Log($"  ADT has {chunkCount}/256 terrain chunks, {adt.TextureNames.Length} textures");
+
+                // Manual action: load 3x3 ADT terrain around the current tile.
+                _renderer.LoadTerrain(adt, provider, mapDir, includeAdjacentTiles: true);
+
+                string? mapName = MapDatabase.GetName(_currentMesh.MapId);
+                _console?.LogSuccess($"Terrain loaded for {mapName ?? mapDir} tile ({_currentMesh.TileX},{_currentMesh.TileY})");
+            }
+            catch (Exception ex)
+            {
+                _console?.LogError($"Failed to load terrain: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Shows a simple input dialog with a TextBox.
+        /// Returns the entered text, or null if cancelled.
+        /// </summary>
+        private static string? ShowInputDialog(string title, string prompt, string defaultValue = "")
+        {
+            using var form = new Form
+            {
+                Text = title,
+                Size = new Size(400, 200),
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                StartPosition = FormStartPosition.CenterParent,
+                MaximizeBox = false,
+                MinimizeBox = false,
+            };
+
+            var lbl = new Label { Text = prompt, Location = new Point(10, 10), AutoSize = true };
+            var txt = new TextBox { Text = defaultValue, Location = new Point(10, 70), Width = 360 };
+            var btnOk = new Button { Text = "OK", DialogResult = DialogResult.OK, Location = new Point(200, 110) };
+            var btnCancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Location = new Point(290, 110) };
+
+            form.Controls.AddRange(new Control[] { lbl, txt, btnOk, btnCancel });
+            form.AcceptButton = btnOk;
+            form.CancelButton = btnCancel;
+
+            txt.SelectAll();
+            txt.Focus();
+
+            return form.ShowDialog() == DialogResult.OK ? txt.Text.Trim() : null;
+        }
+
         private void OnCloseTile(object? sender, EventArgs e)
         {
             _currentMesh = null;
+            _renderer?.ClearLoadedData();
             ClearTestNavState();
             _minimap?.Clear();
             _console?.Log("Tile closed");

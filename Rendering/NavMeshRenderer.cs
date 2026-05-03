@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using MeshViewer3D.Core;
@@ -17,10 +18,20 @@ namespace MeshViewer3D.Rendering
     /// </summary>
     public class NavMeshRenderer : IDisposable
     {
+        private Action<string>? _logCallback;
+
+        public void SetLogCallback(Action<string>? callback) => _logCallback = callback;
+
+        private void Log(string msg) => _logCallback?.Invoke(msg);
+        private void LogSuccess(string msg) => _logCallback?.Invoke($"✓ {msg}");
+        private void LogError(string msg) => _logCallback?.Invoke($"✗ {msg}");
+        private void LogWarning(string msg) => _logCallback?.Invoke($"⚠ {msg}");
+
         // Shaders
         private ShaderProgram? _meshShader;
         private ShaderProgram? _lineShader;
         private ShaderProgram? _coloredLineShader;
+        private ShaderProgram? _terrainShader;
 
         // Buffers navmesh
         private int _meshVao, _meshVbo, _meshEbo;
@@ -50,6 +61,7 @@ namespace MeshViewer3D.Rendering
         private EditableElements? _editableElements;
         private ColorMode _colorMode = ColorMode.ByAreaType;
         private bool _showWireframe = true;
+        private bool _showNavMeshFill = true;
         private bool _showOffMesh = true;
         private bool _enableLighting = true;
         private bool _showBlackspots = true;
@@ -72,6 +84,11 @@ namespace MeshViewer3D.Rendering
         // M2 doodad renderers (one per MDDF placement)
         private readonly List<M2Renderer> _m2Renderers = new();
         private bool _showM2Objects = true;
+
+        // Terrain heightmap renderers (one per ADT tile — 3×3 grid loaded automatically)
+        private readonly List<TerrainRenderer> _terrainRenderers = new();
+        private bool _showTerrain = true;
+        private bool _terrainRenderLogged = false;
 
         // Raytrace marker
         private int _raytraceVao, _raytraceVbo;
@@ -102,6 +119,10 @@ namespace MeshViewer3D.Rendering
             string coloredLineFrag = System.IO.Path.Combine(resourcePath, "colored_line.frag");
             _coloredLineShader = new ShaderProgram(coloredLineVert, coloredLineFrag);
 
+            string terrainVert = System.IO.Path.Combine(resourcePath, "terrain.vert");
+            string terrainFrag = System.IO.Path.Combine(resourcePath, "terrain.frag");
+            _terrainShader = new ShaderProgram(terrainVert, terrainFrag);
+
             // Configuration OpenGL
             GL.Enable(EnableCap.DepthTest);
             GL.Enable(EnableCap.Blend);
@@ -121,6 +142,9 @@ namespace MeshViewer3D.Rendering
         public void LoadMesh(NavMeshData mesh)
         {
             _currentMesh = mesh;
+
+            // Log navmesh bounds for coordinate verification
+            Log($"NavMesh BMin=({mesh.Header.BMin.X:F1},{mesh.Header.BMin.Y:F1},{mesh.Header.BMin.Z:F1}) BMax=({mesh.Header.BMax.X:F1},{mesh.Header.BMax.Y:F1},{mesh.Header.BMax.Z:F1})");
 
             // Générer données de rendu
             var (verts, indices, areas) = mesh.GenerateRenderData();
@@ -704,10 +728,10 @@ namespace MeshViewer3D.Rendering
         /// </summary>
         public void Render(Camera camera, int viewportWidth, int viewportHeight)
         {
+            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
             if (_currentMesh == null || _meshShader == null || _lineShader == null || _coloredLineShader == null)
                 return;
-
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
             // Matrices
             var model = Matrix4.Identity;
@@ -718,18 +742,21 @@ namespace MeshViewer3D.Rendering
                 1f, 10000f
             );
 
-            // Render navmesh
-            _meshShader.Use();
-            _meshShader.SetMatrix4("uModel", model);
-            _meshShader.SetMatrix4("uView", view);
-            _meshShader.SetMatrix4("uProjection", projection);
-            _meshShader.SetBool("uEnableLighting", _enableLighting);
-            _meshShader.SetBool("uEnableFog", false);
-            _meshShader.SetFloat("uAlpha", 1.0f);
-            _meshShader.SetVector3("uCameraPos", camera.GetEyePosition());
+            // Render navmesh polygon fill
+            if (_showNavMeshFill)
+            {
+                _meshShader.Use();
+                _meshShader.SetMatrix4("uModel", model);
+                _meshShader.SetMatrix4("uView", view);
+                _meshShader.SetMatrix4("uProjection", projection);
+                _meshShader.SetBool("uEnableLighting", _enableLighting);
+                _meshShader.SetBool("uEnableFog", false);
+                _meshShader.SetFloat("uAlpha", 1.0f);
+                _meshShader.SetVector3("uCameraPos", camera.GetEyePosition());
 
-            GL.BindVertexArray(_meshVao);
-            GL.DrawElements(PrimitiveType.Triangles, _meshVertexCount, DrawElementsType.UnsignedInt, 0);
+                GL.BindVertexArray(_meshVao);
+                GL.DrawElements(PrimitiveType.Triangles, _meshVertexCount, DrawElementsType.UnsignedInt, 0);
+            }
 
             // Render wireframe
             if (_showWireframe && _wireVertexCount > 0)
@@ -831,6 +858,27 @@ namespace MeshViewer3D.Rendering
                 GL.LineWidth(1.0f);
             }
 
+            // Render terrain heightmap (opaque-ish, drawn before WMO/M2)
+            if (_showTerrain && _terrainRenderers.Count > 0 && _terrainShader != null)
+            {
+                if (!_terrainRenderLogged)
+                {
+                    int totalVerts = 0, totalTris = 0;
+                    foreach (var tr in _terrainRenderers) { totalVerts += tr.TotalVerts; totalTris += tr.TotalTris; }
+                    Log($"Rendering terrain: {_terrainRenderers.Count} tile(s), {totalVerts} verts, {totalTris} tris");
+                    _terrainRenderLogged = true;
+                }
+
+                GL.Enable(EnableCap.Blend);
+                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                GL.DepthMask(false);
+
+                foreach (var tr in _terrainRenderers)
+                    tr.Render(view, projection, _terrainShader);
+
+                GL.DepthMask(true);
+            }
+
             // Render WMO world objects (semi-transparent, drawn last for correct blending)
             if (_showWmoObjects && _wmoRenderers.Count > 0 && _meshShader != null)
             {
@@ -917,6 +965,12 @@ namespace MeshViewer3D.Rendering
             set => _showWireframe = value;
         }
 
+        public bool ShowNavMeshFill
+        {
+            get => _showNavMeshFill;
+            set => _showNavMeshFill = value;
+        }
+
         public bool ShowOffMesh
         {
             get => _showOffMesh;
@@ -952,6 +1006,12 @@ namespace MeshViewer3D.Rendering
         {
             get => _showM2Objects;
             set => _showM2Objects = value;
+        }
+
+        public bool ShowTerrain
+        {
+            get => _showTerrain;
+            set => _showTerrain = value;
         }
 
         public bool ShowVolumes
@@ -1268,9 +1328,148 @@ namespace MeshViewer3D.Rendering
             Console.WriteLine($"  M2 TOTAL: {_m2Renderers.Count} renderers created");
         }
 
+        /// <summary>
+        /// Loads terrain heightmap geometry from the given ADT tile.
+        /// Optionally includes surrounding 8 tiles (3x3).
+        /// </summary>
+        /// <param name="adt">Central tile (already loaded by the caller).</param>
+        /// <param name="provider">MPQ data source; null → renders without BLP textures.</param>
+        /// <param name="mapDir">Internal map directory name (e.g. "Kalimdor").</param>
+        /// <param name="includeAdjacentTiles">True to include surrounding 8 tiles (3x3), false for center tile only.</param>
+        public void LoadTerrain(AdtFile adt, WowDataProvider? provider = null, string? mapDir = null, bool includeAdjacentTiles = false)
+        {
+            // Clear all previous terrain renderers
+            foreach (var r in _terrainRenderers) r.Dispose();
+            _terrainRenderers.Clear();
+            _terrainRenderLogged = false;
+
+            Func<string, byte[]?>? fileLoader = provider != null
+                ? (path => provider.GetFileBytes(path))
+                : null;
+
+            // ── Build list of (tileX, tileY, AdtFile?) to render ──────────────
+            // Pre-fill with the central tile which is already parsed.
+            var tilesToLoad = new List<(int tx, int ty, AdtFile? data)>
+            {
+                (adt.TileX, adt.TileY, adt)
+            };
+
+            // Add surrounding 8 tiles only when requested.
+            if (includeAdjacentTiles && provider != null && mapDir != null)
+            {
+                for (int dy = -1; dy <= 1; dy++)
+                {
+                    for (int dx = -1; dx <= 1; dx++)
+                    {
+                        if (dx == 0 && dy == 0) continue; // central tile already added
+
+                        int tx = adt.TileX + dx;
+                        int ty = adt.TileY + dy;
+                        if (tx < 0 || ty < 0 || tx > 63 || ty > 63) continue;
+
+                        tilesToLoad.Add((tx, ty, null)); // data loaded on demand below
+                    }
+                }
+            }
+
+            // ── Load and upload each tile ─────────────────────────────────────
+            int loadedCount = 0;
+            foreach (var (tx, ty, preloaded) in tilesToLoad)
+            {
+                AdtFile? tile = preloaded;
+
+                if (tile == null)
+                {
+                    // Adjacent tile — try to fetch from MPQ
+                    try
+                    {
+                        string adjPath = $@"World\Maps\{mapDir}\{mapDir}_{tx}_{ty}.adt";
+                        byte[]? adjBytes = provider!.GetFileBytes(adjPath);
+                        if (adjBytes == null) continue;
+                        tile = AdtFile.Load(adjBytes);
+                        tile.TileX = tx;
+                        tile.TileY = ty;
+                    }
+                    catch { continue; }
+                }
+
+                // Skip tiles with no heightmap data
+                bool hasTerrain = false;
+                for (int i = 0; i < tile.TerrainChunks.Length; i++)
+                    if (tile.TerrainChunks[i] != null) { hasTerrain = true; break; }
+                if (!hasTerrain) continue;
+
+                try
+                {
+                    var renderer = new TerrainRenderer { Name = $"ADT ({tx},{ty})" };
+                    var blpWarnings = new List<string>();
+                    renderer.LoadTerrain(tile.TerrainChunks, tile.TextureNames, fileLoader,
+                        w => blpWarnings.Add(w));
+                    foreach (var w in blpWarnings) LogWarning(w);
+                    if (renderer.TotalVerts > 0)
+                    {
+                        _terrainRenderers.Add(renderer);
+                        loadedCount++;
+                    }
+                    else
+                    {
+                        renderer.Dispose();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogError($"Terrain BUILD ERROR tile ({tx},{ty}): {ex.Message}");
+                }
+            }
+
+            if (loadedCount > 0)
+            {
+                int totalVerts = 0; foreach (var r in _terrainRenderers) totalVerts += r.TotalVerts;
+                LogSuccess($"Terrain: {loadedCount} tile(s) loaded ({totalVerts} verts total)");
+            }
+            else
+                Log("Terrain: no MCNK data found in ADT, skipping");
+        }
+
+        /// <summary>
+        /// Clears all currently loaded mesh/terrain/object render data for Close Tile.
+        /// </summary>
+        public void ClearLoadedData()
+        {
+            _currentMesh = null;
+
+            // Clear terrain renderers
+            foreach (var r in _terrainRenderers) r.Dispose();
+            _terrainRenderers.Clear();
+            _terrainRenderLogged = false;
+
+            // Clear world object renderers
+            foreach (var r in _wmoRenderers) r.Dispose();
+            _wmoRenderers.Clear();
+
+            // Clear M2 renderers
+            foreach (var r in _m2Renderers) r.Dispose();
+            _m2Renderers.Clear();
+
+            // Keep existing GL buffers allocated; just mark them unused.
+            _meshVertexCount = 0;
+            _wireVertexCount = 0;
+            _offmeshVertexCount = 0;
+            _blackspotVertexCount = 0;
+            _volumeVertexCount = 0;
+            _customOffmeshVertexCount = 0;
+            _previewLineCount = 0;
+            _raytraceVertexCount = 0;
+            _testNavVertexCount = 0;
+        }
+
         public void Dispose()
         {
             if (_disposed) return;
+
+            // Delete terrain renderers
+            foreach (var r in _terrainRenderers) r.Dispose();
+            _terrainRenderers.Clear();
 
             // Delete WMO renderers
             foreach (var r in _wmoRenderers) r.Dispose();

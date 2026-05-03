@@ -13,10 +13,12 @@ namespace MeshViewer3D.UI
     {
         // UI Controls
         private CheckBox _chkWireframe;
+        private CheckBox _chkNavMeshFill;
         private CheckBox _chkLighting;
         private CheckBox _chkOffMesh;
         private CheckBox _chkBlackspots;
         private CheckBox _chkVolumes;
+        private CheckBox _chkTerrain;
         private CheckBox _chkPolygonIds;
         private CheckBox _chkBvTree;
         private ComboBox _cmbColorMode;
@@ -27,10 +29,12 @@ namespace MeshViewer3D.UI
 
         // Événements
         public event EventHandler<bool>? WireframeChanged;
+        public event EventHandler<bool>? NavMeshFillChanged;
         public event EventHandler<bool>? LightingChanged;
         public event EventHandler<bool>? OffMeshChanged;
         public event EventHandler<bool>? BlackspotsChanged;
         public event EventHandler<bool>? VolumesChanged;
+        public event EventHandler<bool>? TerrainChanged;
         public event EventHandler<ColorMode>? ColorModeChanged;
         public event EventHandler<int>? WireframeAlphaChanged;
         public event EventHandler<int>? FogDensityChanged;
@@ -75,6 +79,11 @@ namespace MeshViewer3D.UI
             this.Controls.Add(_chkWireframe);
             y += 22;
 
+            _chkNavMeshFill = CreateCheckBox("NavMesh Fill (polygons)", y, true);
+            _chkNavMeshFill.CheckedChanged += (s, e) => NavMeshFillChanged?.Invoke(this, _chkNavMeshFill.Checked);
+            this.Controls.Add(_chkNavMeshFill);
+            y += 22;
+
             _chkLighting = CreateCheckBox("Dynamic Lighting", y, true);
             _chkLighting.CheckedChanged += (s, e) => LightingChanged?.Invoke(this, _chkLighting.Checked);
             this.Controls.Add(_chkLighting);
@@ -93,6 +102,11 @@ namespace MeshViewer3D.UI
             _chkVolumes = CreateCheckBox("Convex Volumes", y, true);
             _chkVolumes.CheckedChanged += (s, e) => VolumesChanged?.Invoke(this, _chkVolumes.Checked);
             this.Controls.Add(_chkVolumes);
+            y += 22;
+
+            _chkTerrain = CreateCheckBox("Terrain Heightmap", y, true);
+            _chkTerrain.CheckedChanged += (s, e) => TerrainChanged?.Invoke(this, _chkTerrain.Checked);
+            this.Controls.Add(_chkTerrain);
             y += 22;
 
             _chkPolygonIds = CreateCheckBox("Polygon IDs (debug)", y, false);
@@ -298,6 +312,12 @@ namespace MeshViewer3D.UI
         {
             get => _chkVolumes.Checked;
             set => _chkVolumes.Checked = value;
+        }
+
+        public bool ShowTerrain
+        {
+            get => _chkTerrain.Checked;
+            set => _chkTerrain.Checked = value;
         }
     }
 }
