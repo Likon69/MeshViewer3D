@@ -51,6 +51,7 @@ namespace MeshViewer3D.UI
         private bool _blackspotClickMode = false;
         private bool _jumpLinkClickMode = false;
         private bool _volumeClickMode = false;
+        private readonly HashSet<Keys> _pressedKeys = new();
 
         // Mouse state
         private Point _lastMousePos;
@@ -115,10 +116,29 @@ namespace MeshViewer3D.UI
         private void SetupKeyboardShortcuts()
         {
             this.KeyDown += MainForm_KeyDown;
+            this.KeyUp += MainForm_KeyUp;
+            this.Deactivate += (_, _) => _pressedKeys.Clear();
+        }
+
+        private void MainForm_KeyUp(object? sender, KeyEventArgs e)
+        {
+            _pressedKeys.Remove(e.KeyCode);
         }
         
         private void MainForm_KeyDown(object? sender, KeyEventArgs e)
         {
+            _pressedKeys.Add(e.KeyCode);
+
+            if (_camera.FreeCameraMode && !e.Control && !e.Alt)
+            {
+                if (e.KeyCode == Keys.W || e.KeyCode == Keys.A || e.KeyCode == Keys.S ||
+                    e.KeyCode == Keys.D || e.KeyCode == Keys.Q || e.KeyCode == Keys.E)
+                {
+                    e.Handled = true;
+                    return;
+                }
+            }
+
             // Del - Supprimer élément sélectionné
             if (e.KeyCode == Keys.Delete)
             {
@@ -706,6 +726,9 @@ namespace MeshViewer3D.UI
             _lastFrameTime = now;
             _fps = deltaTime > 0 ? 1f / deltaTime : 60f;
 
+            if (_camera.FreeCameraMode)
+                UpdateFreeCameraMovement(deltaTime);
+
             // Render
             _renderer.Render(_camera, _glControl.Width, _glControl.Height);
 
@@ -798,6 +821,12 @@ namespace MeshViewer3D.UI
             float dy = e.Y - _lastMousePos.Y;
             _lastMousePos = e.Location;
 
+            if (_camera.FreeCameraMode && ModifierKeys.HasFlag(Keys.Shift))
+            {
+                dx *= _camera.PrecisionMultiplier;
+                dy *= _camera.PrecisionMultiplier;
+            }
+
             if (_dragButton == MouseButtons.Middle || _dragButton == MouseButtons.Left)
             {
                 _camera.Orbit(dx, dy);
@@ -861,7 +890,10 @@ namespace MeshViewer3D.UI
             }
             
             // Sinon : zoom caméra
-            _camera.Zoom(e.Delta);
+            if (_camera.FreeCameraMode && ModifierKeys.HasFlag(Keys.Shift))
+                _camera.Zoom(e.Delta * _camera.PrecisionMultiplier);
+            else
+                _camera.Zoom(e.Delta);
         }
 
         // Menu handlers
@@ -1270,7 +1302,41 @@ namespace MeshViewer3D.UI
             if (_freeCameraMenuItem != null)
                 _freeCameraMenuItem.Checked = _camera.FreeCameraMode;
 
+            if (!_camera.FreeCameraMode)
+                _pressedKeys.Clear();
+
             _console?.Log($"Free camera: {(_camera.FreeCameraMode ? "ON" : "OFF")}");
+        }
+
+        private void UpdateFreeCameraMovement(float deltaTime)
+        {
+            if (deltaTime <= 0f)
+                return;
+
+            float speed = _camera.FreeMoveSpeed;
+            if (_pressedKeys.Contains(Keys.ShiftKey) || _pressedKeys.Contains(Keys.LShiftKey) || _pressedKeys.Contains(Keys.RShiftKey))
+                speed *= _camera.PrecisionMultiplier;
+
+            float forward = 0f;
+            float right = 0f;
+            float up = 0f;
+
+            if (_pressedKeys.Contains(Keys.W)) forward += 1f;
+            if (_pressedKeys.Contains(Keys.S)) forward -= 1f;
+            if (_pressedKeys.Contains(Keys.D)) right += 1f;
+            if (_pressedKeys.Contains(Keys.A)) right -= 1f;
+            if (_pressedKeys.Contains(Keys.E)) up += 1f;
+            if (_pressedKeys.Contains(Keys.Q)) up -= 1f;
+
+            if (forward == 0f && right == 0f && up == 0f)
+                return;
+
+            var move = new Vector3(right, up, forward);
+            if (move.LengthSquared > 1f)
+                move = Vector3.Normalize(move);
+
+            float frameStep = speed * deltaTime;
+            _camera.TranslateLocal(move.Z * frameStep, move.X * frameStep, move.Y * frameStep);
         }
 
         private void OnBlackspotClickModeToggled(object? sender, bool enabled)

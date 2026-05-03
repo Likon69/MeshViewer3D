@@ -26,6 +26,8 @@ namespace MeshViewer3D.Rendering
         public float OrbitSensitivity { get; set; } = 0.3f;
         public float PanSensitivity { get; set; } = 0.5f;
         public float ZoomSensitivity { get; set; } = 0.1f;
+        public float FreeMoveSpeed { get; set; } = 420f;
+        public float PrecisionMultiplier { get; set; } = 0.25f;
 
         /// <summary>
         /// Applique rotation orbite (mouse drag)
@@ -152,6 +154,20 @@ namespace MeshViewer3D.Rendering
             Target = target;
             if (distance.HasValue)
                 Distance = Math.Clamp(distance.Value, MinDistance, MaxDistance);
+        }
+
+        /// <summary>
+        /// Translate la caméra libre dans son espace local.
+        /// forward/right/up: unités monde à appliquer.
+        /// </summary>
+        public void TranslateLocal(float forward, float right, float up)
+        {
+            var forwardVec = GetForwardVector();
+            var rightVec = GetRightVector();
+            var upVec = Vector3.UnitY;
+            Target += forwardVec * forward;
+            Target += rightVec * right;
+            Target += upVec * up;
         }
 
         /// <summary>
