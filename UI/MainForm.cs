@@ -41,6 +41,7 @@ namespace MeshViewer3D.UI
         private GameObjectPanel? _gameObjectPanel;
         private WmoBlacklistPanel? _wmoBlacklistPanel;
         private PerModelPanel? _perModelPanel;
+        private ToolStripMenuItem? _freeCameraMenuItem;
 
         // État
         private NavMeshData? _currentMesh;
@@ -323,6 +324,12 @@ namespace MeshViewer3D.UI
                 OnAnalyzeNavMesh(null, EventArgs.Empty);
                 e.Handled = true;
             }
+            // C - Toggle free camera mode
+            else if (e.KeyCode == Keys.C && !e.Control && !e.Alt)
+            {
+                OnToggleFreeCamera(null, EventArgs.Empty);
+                e.Handled = true;
+            }
         }
         
         private void DeleteSelectedElement()
@@ -383,6 +390,12 @@ namespace MeshViewer3D.UI
             
             viewMenu.DropDownItems.Add(new ToolStripSeparator());
             viewMenu.DropDownItems.Add("Reset Camera", null, OnResetCamera);
+            _freeCameraMenuItem = new ToolStripMenuItem("Free Camera Mode (C)", null, OnToggleFreeCamera)
+            {
+                Checked = _camera.FreeCameraMode,
+                CheckOnClick = false
+            };
+            viewMenu.DropDownItems.Add(_freeCameraMenuItem);
             menuStrip.Items.Add(viewMenu);
 
             // Menu Mesh (édition)
@@ -1251,6 +1264,15 @@ namespace MeshViewer3D.UI
             _console?.Log("Camera reset");
         }
 
+        private void OnToggleFreeCamera(object? sender, EventArgs e)
+        {
+            _camera.FreeCameraMode = !_camera.FreeCameraMode;
+            if (_freeCameraMenuItem != null)
+                _freeCameraMenuItem.Checked = _camera.FreeCameraMode;
+
+            _console?.Log($"Free camera: {(_camera.FreeCameraMode ? "ON" : "OFF")}");
+        }
+
         private void OnBlackspotClickModeToggled(object? sender, bool enabled)
         {
             _blackspotClickMode = enabled;
@@ -1767,7 +1789,8 @@ namespace MeshViewer3D.UI
                                      $"Tile: ({_currentMesh.TileX}, {_currentMesh.TileY})\n" +
                                      $"Polys: {_currentMesh.Polys.Length} | Verts: {_currentMesh.Vertices.Length}\n" +
                                      $"Blackspots: {_editableElements.Blackspots.Count} | Volumes: {_editableElements.ConvexVolumes.Count}\n" +
-                                     $"FPS: {_fps:F0} ({1000f/_fps:F1} ms)" + modeText;
+                                     $"FPS: {_fps:F0} ({1000f/_fps:F1} ms)\n" +
+                                     $"Camera: {(_camera.FreeCameraMode ? "Free" : "Orbit")}" + modeText;
             }
         }
         

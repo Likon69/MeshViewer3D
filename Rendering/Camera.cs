@@ -14,10 +14,11 @@ namespace MeshViewer3D.Rendering
         public float Distance { get; set; } = 500f;
         public float Yaw { get; set; } = 45f;           // Rotation horizontale (degrés)
         public float Pitch { get; set; } = 45f;         // Rotation verticale (degrés)
+        public bool FreeCameraMode { get; set; } = false;
 
         // Limites
-        public float MinDistance { get; set; } = 10f;
-        public float MaxDistance { get; set; } = 5000f;
+        public float MinDistance { get; set; } = 0.01f;
+        public float MaxDistance { get; set; } = 1000000f;
         public float MinPitch { get; set; } = -89f;
         public float MaxPitch { get; set; } = 89f;
 
@@ -51,6 +52,9 @@ namespace MeshViewer3D.Rendering
             var up = GetUpVector();
 
             float panSpeed = Distance * PanSensitivity * 0.001f;
+            if (FreeCameraMode)
+                panSpeed = MathF.Max(0.02f, panSpeed);
+
             Target += right * (-deltaX * panSpeed);
             Target += up * (deltaY * panSpeed);
         }
@@ -60,6 +64,15 @@ namespace MeshViewer3D.Rendering
         /// </summary>
         public void Zoom(float delta)
         {
+            if (FreeCameraMode)
+            {
+                // Free camera: dolly along current view direction instead of clamping orbit distance.
+                float direction = delta > 0 ? 1f : -1f;
+                float dollyStep = MathF.Max(0.5f, Distance * 0.08f);
+                Target += GetForwardVector() * (direction * dollyStep);
+                return;
+            }
+
             float factor = delta > 0 ? (1f - ZoomSensitivity) : (1f + ZoomSensitivity);
             Distance *= factor;
             Distance = Math.Clamp(Distance, MinDistance, MaxDistance);
