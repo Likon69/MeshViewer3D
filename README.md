@@ -2,8 +2,8 @@
 
 > NavMesh viewer and editor for WoW 3.3.5a (build 12340), inspired by Honorbuddy's Tripper.Renderer.
 
-![Reference](image/Town%20in%20a%20Box.jpg)
-![Orgrimmar](Resources/Org.png)
+
+![Orgrimmar](Resources/0014531.png)
 
 ---
 
@@ -67,9 +67,11 @@ dotnet run
 | WMO Blacklist | **Done** | CheckedListBox, Select All/Deselect All, Export/Import |
 | Per-Model Overrides | **Done** | Per-model volume/collision settings, JSON Export/Import |
 | M2 model rendering | **Done** | Bounding geometry parser (0xD8 offsets), same coordinate pipeline as WMO |
-| Terrain heightmap (ADT MCNK) | **Not started** | Ground mesh rendering not written |
-| BLP texture loading | **Not started** | No GPU texture upload |
-| WDT parser (world tile index) | **Not started** | Manual tile selection only |
+| Terrain heightmap (ADT MCNK) | **Done** | ADT MCNK chunks → UV-textured OpenGL mesh, height-correct ground geometry |
+| BLP texture loading | **Done** | MPQ → BlpFile.Load → GlTexture.FromBlp, per-layer texture draw groups |
+| WDT parser (world tile index) | **Done** | WDT tile existence grid, minimap tile highlighting |
+| NavMesh Fill toggle | **Done** | Settings panel checkbox — show/hide navmesh polygon fill |
+| 3×3 ADT terrain grid | **Done** | Map > Load Terrain from ADT loads center tile + up to 8 surrounding tiles |
 
 ---
 
@@ -146,69 +148,6 @@ All XML coordinates are in **WoW world space** (X=North, Y=West, Z=Up).
 
 ---
 
-## Architecture
-
-```
-MeshViewer3D/
-├── Core/
-│   ├── MmtileLoader.cs          Trinity/Mangos .mmtile parser (Detour format)
-│   ├── NavMeshData.cs            Vertex/poly container, Merge(), render data generation
-│   ├── CoordinateSystem.cs       WoW ↔ Detour ↔ OpenGL conversions
-│   ├── EditableElements.cs       Central store for blackspots, volumes, jump links
-│   ├── MapDatabase.cs            Maps.json loader — GetDirectory/GetName/Get by mapId
-│   ├── AppSettings.cs            Persistent settings (settings.json) — WoW Data path
-│   ├── NavMeshPathfinder.cs      A* pathfinder on Detour polygon graph (Neis[] traversal)
-│   ├── Mpq/
-│   │   ├── MpqArchive.cs         Pure C# MPQ v1/v2 reader (crypto, block/hash tables)
-│   │   ├── MpqStream.cs          Decompression (Deflate, Zlib, PKLib, Huffman, WAV)
-│   │   ├── MpqFileSystem.cs      Priority-stack VFS over multiple archives
-│   │   └── WowDataProvider.cs    High-level API: Open(dataPath) → GetFileBytes()
-│   └── Formats/
-│       ├── ChunkReader.cs        Shared IFF chunk walker for WoW binary files
-│       ├── Wmo/
-│       │   ├── WmoFile.cs        WMO v17 root parser (MOHD → GroupCount, bounds)
-│       │   ├── WmoGroup.cs       WMO v17 group parser (MOVT/MOVI/MOPY → geometry)
-│       │   └── WmoStructures.cs  MogiGroupFlags, MopyFlags enums
-│       ├── Adt/
-│       │   ├── AdtFile.cs        ADT v18 parser (MWMO/MWID/MODF, MMDX/MMID/MDDF)
-│       │   └── AdtStructures.cs  MODF (64B) and MDDF (36B) structs
-│       └── M2/
-│           └── M2File.cs         M2 bounding geometry parser (WotLK header, offsets 0xD8-0xE4)
-├── Data/
-│   ├── Blackspot.cs              Cylindrical no-go zone struct
-│   ├── BlackspotSerializer.cs    XML save/load + CSV export
-│   ├── ConvexVolume.cs           Polygonal volume with AreaType
-│   ├── ConvexVolumeSerializer.cs XML save/load (child Vertex elements)
-│   ├── OffMeshConnection.cs      Custom jump link struct (36 bytes, matches Detour)
-│   ├── OffMeshSerializer.cs      XML + binary (.offmesh) + CSV export
-│   ├── AreaType.cs               MaNGOS NavTerrain area types + AreaTypeInfo catalog
-│   ├── MeshHeader.cs             Detour dtMeshHeader mirror
-│   └── NavPoly.cs                Detour polygon structs
-├── Rendering/
-│   ├── NavMeshRenderer.cs        Main OpenGL renderer (mesh, wireframe, offmesh, blackspots, volumes, WMO, M2)
-│   ├── WmoRenderer.cs            Per-WMO-instance renderer (CPU-baked world transform, yellow)
-│   ├── M2Renderer.cs             Per-M2-doodad renderer (bounding geometry, red)
-│   ├── Camera.cs                 Orbit camera (orbit/pan/zoom)
-│   ├── RayCaster.cs              Screen→world ray, Möller-Trumbore, cylinder intersection
-│   ├── ShaderProgram.cs          GLSL shader compile/link
-│   └── ColorScheme.cs            Area colors, height gradients, wireframe colors
-├── UI/
-│   ├── MainForm.cs               Main window, menus, keyboard routing, OpenGL host
-│   ├── BlackspotPanel.cs         Blackspot list + property editor
-│   ├── JumpLinksPanel.cs         Jump link list + two-click placement
-│   ├── ConvexVolumesPanel.cs     Volume list + vertex placement + preview
-│   ├── GameObjectPanel.cs        WMO/M2 file lists with visibility toggles
-│   ├── WmoBlacklistPanel.cs      WMO blacklist with Select All/Deselect All, Export/Import
-│   ├── PerModelPanel.cs          Per-model overrides (collision, area type, scale), JSON Export/Import
-│   ├── SettingsPanel.cs          Rendering toggles, color modes, alpha/fog sliders
-│   ├── MinimapControl.cs         2D tile grid (64×64)
-│   └── ConsoleControl.cs         Color-coded log output
-└── Resources/
-    ├── mesh.vert / mesh.frag     Navmesh shader (position + color + lighting + alpha)
-    ├── line.vert / line.frag     Uniform-color line shader
-    ├── colored_line.vert/frag    Per-vertex color line shader
-    └── Maps.json                 Map ID → name/directory lookup (40 maps, WoW 3.3.5a Map.dbc)
-```
 
 ### Technologies
 
@@ -216,16 +155,6 @@ MeshViewer3D/
 - **OpenTK 4.8.2** — OpenGL 3.3+ bindings
 - **Newtonsoft.Json** — Map name lookup
 - **Pure C# MPQ** — No native DLL dependencies for archive reading
-
----
-
-## Build
-
-```
-dotnet build MeshViewer3D.csproj
-```
-
-Current status: **0 errors, ~70 warnings** (nullable annotations, pre-existing SDK warnings).
 
 ---
 

@@ -15,16 +15,18 @@
 7. [Jump Links (OffMesh Connections)](#jump-links)
 8. [Convex Volumes](#convex-volumes)
 9. [WMO 3D Visualization](#wmo-3d-visualization)
-10. [Menus](#menus)
-11. [UI Panels](#ui-panels)
-12. [Keyboard Reference](#keyboard-reference)
-13. [File Formats](#file-formats)
-14. [Coordinate System](#coordinate-system)
-15. [Color Reference](#color-reference)
-16. [Architecture Decisions](#architecture-decisions)
-17. [Feature Comparison with Tripper.Renderer](#feature-comparison)
-18. [Limitations & Planned Features](#limitations)
-19. [Troubleshooting](#troubleshooting)
+10. [Terrain Heightmap Visualization](#terrain-heightmap-visualization)
+11. [WDT Tile Grid](#wdt-tile-grid)
+12. [Menus](#menus)
+13. [UI Panels](#ui-panels)
+14. [Keyboard Reference](#keyboard-reference)
+15. [File Formats](#file-formats)
+16. [Coordinate System](#coordinate-system)
+17. [Color Reference](#color-reference)
+18. [Architecture Decisions](#architecture-decisions)
+19. [Feature Comparison with Tripper.Renderer](#feature-comparison)
+20. [Limitations & Planned Features](#limitations)
+21. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -43,7 +45,7 @@ The application also reads WoW MPQ archives directly (pure C#, no native DLLs) t
 | OS | Windows 10 or later |
 | Runtime | .NET 6.0 |
 | GPU | OpenGL 3.3+ |
-| WoW data (optional) | WoW 3.3.5a `Data/` folder with MPQ archives (for WMO visualization) |
+| WoW data (optional) | WoW 3.3.5a `Data/` folder with MPQ archives (for WMO and terrain visualization) |
 
 ---
 
@@ -362,6 +364,70 @@ Toggle WMO visibility per-object in the Objects panel, or globally via the Setti
 
 ---
 
+## Terrain Heightmap Visualization
+
+MeshViewer3D renders the actual WoW terrain heightmap from ADT MCNK chunks alongside the navmesh, giving accurate spatial context for editing navigation data.
+
+### How it works
+
+1. When a navmesh tile is loaded and a WoW Data folder is configured, the corresponding ADT file is read from MPQ.
+2. Each of the 256 MCNK chunks in the ADT provides a 9×9 height grid plus a 8×8 inner detail grid (145 vertices per chunk).
+3. All chunks are assembled into a single height mesh and uploaded to the GPU as a VBO.
+4. Textures are loaded as BLP files from MPQ and uploaded via `GlTexture.FromBlp`. Up to 4 texture layers per chunk are blended using the MCAL alpha maps.
+5. Vertices store position (XYZ) and UV coordinates (5 floats per vertex).
+
+### Terrain Loading Modes
+
+MeshViewer3D supports two terrain loading modes:
+
+- **Automatic on tile load**: when you load a `.mmtile`, the terrain for the center tile is loaded automatically.
+- **Manual 3×3 load**: use **Map > Load Terrain from ADT...** to load the center tile plus the 8 surrounding ADT neighbours.
+
+This manual 3×3 mode provides seamless terrain coverage around the active tile (approximately 1.6 km × 1.6 km).
+
+- Neighbour tiles are loaded silently; missing tiles are skipped without error.
+- All loaded `TerrainRenderer` instances share the same shader and are drawn in the same pass.
+
+### Setup
+
+1. **Map > Set WoW Data Folder...** — point to the WoW 3.3.5a `Data/` folder.
+2. Load any `.mmtile` tile. The center-tile terrain appears automatically beneath the navmesh.
+3. Optional: use **Map > Load Terrain from ADT...** to load the full 3×3 surrounding terrain grid.
+3. Toggle terrain visibility with the **Terrain Heightmap** checkbox in the Settings panel.
+
+### Technical details
+
+- **Shader**: `mesh.vert` / `mesh.frag` — UV-mapped, simple diffuse lighting.
+- **VBO layout**: `[posX, posY, posZ, u, v]` × N vertices (5 floats, 20 bytes each).
+- **Index buffer**: Triangle list from MCNK index generation.
+- **BLP loading**: `Core/Formats/Blp/BlpFile.cs` — DXT1/DXT3/DXT5 + uncompressed BGRA. Decoded to RGBA32 before GPU upload.
+- **GPU texture**: `Rendering/GlTexture.cs` — `GL_TEXTURE_2D`, `GL_LINEAR_MIPMAP_LINEAR`, mipmap generation via `GL.GenerateMipmap`.
+- **Coordinate transform**: ADT positions are converted through the same WoW → OpenGL pipeline as WMO geometry.
+- **Implementation**: `Rendering/TerrainRenderer.cs`, `Rendering/NavMeshRenderer.cs` (LoadTerrain method).
+
+---
+
+## WDT Tile Grid
+
+The WDT (World Data Table) file for each map contains a 64×64 boolean grid indicating which ADT tiles exist. MeshViewer3D parses this grid to highlight available tiles on the minimap.
+
+### How it works
+
+1. When a WoW Data folder is configured and a tile is loaded, the map's `.wdt` file is read from MPQ (e.g. `World\Maps\Kalimdor\Kalimdor.wdt`).
+2. The MAIN chunk (8192 bytes = 64×64 × 2 bytes) is parsed. Flag bit `0x1` per entry indicates the tile exists.
+3. The resulting `bool[64,64]` grid is passed to the minimap control, which colors existing tiles differently.
+4. The tile being viewed is highlighted in the minimap.
+
+### Technical details
+
+- **Parser**: `Core/Formats/Wdt/WdtFile.cs` — reads MVER + MAIN chunks via `ChunkReader`.
+- **WDT format**: `WoW\Maps\<MapDir>\<MapDir>.wdt` inside MPQ archives.
+- **MAIN entry**: 4 bytes — `uint flags` (bit 0 = tile exists) + 4 bytes padding.
+- **Minimap integration**: `UI/MinimapControl.cs` receives the `bool[64,64]` grid and renders existing tiles as brighter cells.
+- **Implementation**: `Core/Formats/Wdt/WdtFile.cs`, `Core/Formats/Wdt/WdtStructures.cs`.
+
+---
+
 ## Map Database
 
 The application uses `Maps.json` (in `Resources/`) as a database of all WoW 3.3.5a maps. Each entry contains:
@@ -398,8 +464,9 @@ On startup, the saved WoW Data path is restored automatically if: the directory 
 |------|-------------|
 | Load Tile... | Open a single `.mmtile` file |
 | Load Folder... | Load all `.mmtile` files in a directory (merges into one scene, 60k vertex limit) |
-| Set WoW Data Folder... | Point to WoW 3.3.5a `Data/` folder to enable WMO visualization (auto-saved) |
-| Close Tile | Unload the current navmesh |
+| Load Terrain from ADT... | Load terrain from ADT for the current tile plus surrounding 8 neighbours (3×3 grid) |
+| Set WoW Data Folder... | Point to WoW 3.3.5a `Data/` folder to enable WMO + terrain visualization (auto-saved) |
+| Close Tile | Unload the current navmesh and clear loaded terrain/WMO/M2 scene data |
 | Exit | Quit the application |
 
 ### Mesh
@@ -469,6 +536,8 @@ The right side panel has tabs:
 
 ### Settings Tab
 - Rendering toggles: wireframe, lighting, offmesh display, blackspot display, volume display
+- **NavMesh Fill (polygons)** — show/hide the filled polygon interior of the navmesh (wireframe edges remain)
+- **Terrain Heightmap** — show/hide the ADT terrain mesh beneath the navmesh
 - Color mode selection
 - Alpha and fog sliders
 
@@ -686,6 +755,11 @@ Comparison with Honorbuddy's Tripper.Renderer:
 | Settings persistence | N/A | Yes | Done |
 | WMO Blacklist | Yes | Yes | Done |
 | Per-Model Overrides | Yes | Yes | Done |
+| Terrain heightmap (ADT MCNK) | No | Yes | Done |
+| BLP texture loading | No | Yes | Done |
+| WDT tile grid | No | Yes | Done |
+| NavMesh Fill toggle | No | Yes | Done |
+| 3×3 ADT terrain grid | No | Yes | Done |
 | Test Navigation (pathfinding) | Yes | Yes | Done |
 | — Funnel Algorithm (smooth paths) | No | Yes | Done |
 | — Cross-tile navigation | No | Yes | Done |
@@ -700,9 +774,6 @@ Comparison with Honorbuddy's Tripper.Renderer:
 ## Limitations
 
 ### Not implemented (out of scope)
-- Terrain heightmap rendering (ADT MCNK chunks)
-- BLP texture loading / GPU texture upload
-- WDT parser (world tile index — tiles are loaded manually)
 - Multi-selection
 - Snap to grid
 - Copy/paste
