@@ -1182,17 +1182,19 @@ namespace MeshViewer3D.Rendering
         }
 
         /// <summary>
-        /// Loads WMO objects from an ADT tile using the WoW data provider.
-        /// Replaces any previously loaded WMO renderers.
+        /// Loads WMO/M2 objects from one ADT tile using the WoW data provider.
+        /// When clearExisting is true, previously loaded world object renderers are cleared first.
         /// </summary>
-        public void LoadWorldObjects(WowDataProvider dataProvider, AdtFile adt)
+        public void LoadWorldObjects(WowDataProvider dataProvider, AdtFile adt, bool clearExisting = true)
         {
             Vector3? meshCenter = _currentMesh?.GetCenterDetour();
             const float placementSwitchThreshold = 1800f;
 
-            // Clear old renderers
-            foreach (var r in _wmoRenderers) r.Dispose();
-            _wmoRenderers.Clear();
+            if (clearExisting)
+            {
+                foreach (var r in _wmoRenderers) r.Dispose();
+                _wmoRenderers.Clear();
+            }
 
             foreach (var modf in adt.WmoInstances)
             {
@@ -1303,8 +1305,11 @@ namespace MeshViewer3D.Rendering
             Console.WriteLine($"  WMO TOTAL: {_wmoRenderers.Count} renderers created");
 
             // ── M2 doodad loading ──────────────────────────────────────────
-            foreach (var r in _m2Renderers) r.Dispose();
-            _m2Renderers.Clear();
+            if (clearExisting)
+            {
+                foreach (var r in _m2Renderers) r.Dispose();
+                _m2Renderers.Clear();
+            }
 
             foreach (var mddf in adt.M2Instances)
             {
@@ -1415,12 +1420,15 @@ namespace MeshViewer3D.Rendering
         /// <param name="provider">MPQ data source; null → renders without BLP textures.</param>
         /// <param name="mapDir">Internal map directory name (e.g. "Kalimdor").</param>
         /// <param name="includeAdjacentTiles">True to include surrounding 8 tiles (3x3), false for center tile only.</param>
-        public void LoadTerrain(AdtFile adt, WowDataProvider? provider = null, string? mapDir = null, bool includeAdjacentTiles = false)
+        public void LoadTerrain(AdtFile adt, WowDataProvider? provider = null, string? mapDir = null, bool includeAdjacentTiles = false, bool clearExisting = true)
         {
-            // Clear all previous terrain renderers
-            foreach (var r in _terrainRenderers) r.Dispose();
-            _terrainRenderers.Clear();
-            _terrainRenderLogged = false;
+            // Clear previous terrain renderers when starting a new terrain scene.
+            if (clearExisting)
+            {
+                foreach (var r in _terrainRenderers) r.Dispose();
+                _terrainRenderers.Clear();
+                _terrainRenderLogged = false;
+            }
 
             Func<string, byte[]?>? fileLoader = provider != null
                 ? (path => provider.GetFileBytes(path))
@@ -1508,6 +1516,22 @@ namespace MeshViewer3D.Rendering
             }
             else
                 Log("Terrain: no MCNK data found in ADT, skipping");
+        }
+
+        /// <summary>
+        /// Clears currently loaded world object and terrain renderers without touching navmesh buffers.
+        /// </summary>
+        public void ClearWorldScene()
+        {
+            foreach (var r in _terrainRenderers) r.Dispose();
+            _terrainRenderers.Clear();
+            _terrainRenderLogged = false;
+
+            foreach (var r in _wmoRenderers) r.Dispose();
+            _wmoRenderers.Clear();
+
+            foreach (var r in _m2Renderers) r.Dispose();
+            _m2Renderers.Clear();
         }
 
         /// <summary>

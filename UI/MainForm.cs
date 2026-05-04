@@ -45,6 +45,7 @@ namespace MeshViewer3D.UI
 
         // État
         private NavMeshData? _currentMesh;
+        private readonly List<(int TileX, int TileY)> _loadedTileCoords = new();
         private EditableElements _editableElements = new();
         private DateTime _lastFrameTime = DateTime.Now;
         private float _fps;
@@ -380,6 +381,7 @@ namespace MeshViewer3D.UI
             // Menu Map
             var mapMenu = new ToolStripMenuItem("Map");
             mapMenu.DropDownItems.Add("Load Tile...", null, OnLoadTile);
+            mapMenu.DropDownItems.Add("Load Tiles...", null, OnLoadTiles);
             mapMenu.DropDownItems.Add("Load Folder...", null, OnLoadFolder);
             mapMenu.DropDownItems.Add(new ToolStripSeparator());
             mapMenu.DropDownItems.Add("Load WDT (Tile Grid)...", null, OnLoadWdt);
@@ -912,6 +914,8 @@ namespace MeshViewer3D.UI
                     _console?.Log($"Loading tile: {System.IO.Path.GetFileName(ofd.FileName)}...");
                     
                     _currentMesh = MmtileLoader.LoadTile(ofd.FileName);
+                    _loadedTileCoords.Clear();
+                    _loadedTileCoords.Add((_currentMesh.TileX, _currentMesh.TileY));
                     _renderer?.LoadMesh(_currentMesh);
                     
                     // Focus camera sur la tile
@@ -945,15 +949,46 @@ namespace MeshViewer3D.UI
             };
             if (fbd.ShowDialog() != DialogResult.OK) return;
 
-            var files = Directory.GetFiles(fbd.SelectedPath, "*.mmtile");
+            var files = Directory.GetFiles(fbd.SelectedPath, "*.mmtile")
+                .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+                .ToArray();
             if (files.Length == 0)
             {
                 _console?.LogWarning("No .mmtile files found in selected folder");
                 return;
             }
 
+            LoadTileFiles(files, allowAutoSubset: true);
+        }
+
+        private void OnLoadTiles(object? sender, EventArgs e)
+        {
+            using var ofd = new OpenFileDialog
+            {
+                Filter = "NavMesh Tiles (*.mmtile)|*.mmtile",
+                Title = "Select Navigation Mesh Tiles",
+                Multiselect = true
+            };
+            if (ofd.ShowDialog() != DialogResult.OK) return;
+
+            var files = ofd.FileNames
+                .Where(f => f.EndsWith(".mmtile", StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(f => Path.GetFileName(f), StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+
+            if (files.Length == 0)
+            {
+                _console?.LogWarning("No .mmtile files selected");
+                return;
+            }
+
+            LoadTileFiles(files, allowAutoSubset: true);
+        }
+
+        private void LoadTileFiles(string[] files, bool allowAutoSubset)
+        {
             _console?.Log($"Loading {files.Length} tiles...");
-            _minimap?.Clear();
 
             var allMeshes = new List<NavMeshData>();
             int loaded = 0, failed = 0;
@@ -964,7 +999,6 @@ namespace MeshViewer3D.UI
                 {
                     var mesh = MmtileLoader.LoadTile(file);
                     allMeshes.Add(mesh);
-                    _minimap?.SetTileLoaded(mesh.TileX, mesh.TileY, true);
                     loaded++;
                 }
                 catch (Exception ex)
@@ -980,24 +1014,80 @@ namespace MeshViewer3D.UI
                 return;
             }
 
-            // Hard check: aborting before merge is safer than rendering corrupt geometry
+            // If we exceed the ushort-based merge limit, either fail (manual selection) or pick a compact subset (folder load).
             int totalVerts = 0;
             foreach (var m in allMeshes) totalVerts += m.Vertices.Length;
-            if (totalVerts > 60000)
+
+            var meshesToMerge = allMeshes;
+            if (totalVerts > NavMeshData.MaxMergeVertexCount)
             {
-                _console?.LogError($"Cannot load {loaded} tiles: {totalVerts} total vertices exceed ushort index limit (60000). Load fewer tiles.");
-                _minimap?.Clear();
-                return;
+                if (!allowAutoSubset)
+                {
+                    _console?.LogError(
+                        $"Cannot load {allMeshes.Count} selected tiles: {totalVerts} total vertices exceed merge limit " +
+                        $"({NavMeshData.MaxMergeVertexCount}). Select fewer tiles.");
+                    return;
+                }
+
+                float centerX = (float)allMeshes.Average(m => m.TileX);
+                float centerY = (float)allMeshes.Average(m => m.TileY);
+
+                meshesToMerge = allMeshes
+                    .OrderBy(m =>
+                    {
+                        float dx = m.TileX - centerX;
+                        float dy = m.TileY - centerY;
+                        return dx * dx + dy * dy;
+                    })
+                    .ToList();
+
+                int runningVerts = 0;
+                var selected = new List<NavMeshData>();
+                foreach (var mesh in meshesToMerge)
+                {
+                    if (runningVerts + mesh.Vertices.Length > NavMeshData.MaxMergeVertexCount)
+                        continue;
+
+                    selected.Add(mesh);
+                    runningVerts += mesh.Vertices.Length;
+                }
+
+                if (selected.Count == 0)
+                {
+                    _console?.LogError($"Cannot load tiles: even a single tile exceeds merge limit ({NavMeshData.MaxMergeVertexCount}).");
+                    _minimap?.Clear();
+                    return;
+                }
+
+                meshesToMerge = selected;
+                _console?.LogWarning(
+                    $"Total vertices ({totalVerts}) exceed merge limit ({NavMeshData.MaxMergeVertexCount}). " +
+                    $"Loaded nearest subset: {meshesToMerge.Count}/{allMeshes.Count} tiles ({runningVerts} verts).");
             }
 
-            _currentMesh = NavMeshData.Merge(allMeshes);
+            _minimap?.Clear();
+            foreach (var mesh in allMeshes)
+                _minimap?.SetTileLoaded(mesh.TileX, mesh.TileY, true);
+
+            _loadedTileCoords.Clear();
+            foreach (var mesh in allMeshes)
+                _loadedTileCoords.Add((mesh.TileX, mesh.TileY));
+
+            _currentMesh = NavMeshData.Merge(meshesToMerge);
             _renderer?.LoadMesh(_currentMesh);
             _camera.FocusOn(_currentMesh.GetCenterDetour(), 800f);
-            _minimap?.SetCurrentTile(allMeshes[0].TileX, allMeshes[0].TileY);
+            _minimap?.SetCurrentTile(_currentMesh.TileX, _currentMesh.TileY);
 
-            _console?.LogSuccess($"Loaded {loaded} tiles" +
+            _console?.LogSuccess($"Loaded {meshesToMerge.Count} tiles" +
                 (failed > 0 ? $" ({failed} failed)" : string.Empty) +
                 $" — {_currentMesh.Polys.Length} polys, {_currentMesh.Vertices.Length} verts");
+
+            if (meshesToMerge.Count != allMeshes.Count)
+            {
+                _console?.LogWarning(
+                    $"NavMesh render is limited to {meshesToMerge.Count}/{allMeshes.Count} tiles due to vertex index limits, " +
+                    "but terrain and world objects will still load for all selected tiles.");
+            }
 
             TryLoadWorldObjects();
         }
@@ -1045,32 +1135,57 @@ namespace MeshViewer3D.UI
                 return;
             }
 
-            string adtPath = $@"World\Maps\{mapDir}\{mapDir}_{_currentMesh.TileX}_{_currentMesh.TileY}.adt";
-            _console?.Log($"Loading ADT: {adtPath}...");
+            var tilesToLoad = _loadedTileCoords.Count > 0
+                ? _loadedTileCoords.Distinct().ToList()
+                : new List<(int TileX, int TileY)> { (_currentMesh.TileX, _currentMesh.TileY) };
+
+            _console?.Log($"Loading ADT scene for {tilesToLoad.Count} tile(s)...");
 
             try
             {
                 using var provider = WowDataProvider.Open(_wowDataPath);
-                byte[]? adtBytes = provider.GetFileBytes(adtPath);
-                if (adtBytes == null)
+                _renderer.ClearWorldScene();
+
+                bool panelSeeded = false;
+                int adtLoaded = 0;
+                int totalWmoPlacements = 0;
+
+                foreach (var (tileX, tileY) in tilesToLoad)
                 {
-                    _console?.LogWarning($"ADT not found in MPQ: {adtPath}");
+                    string adtPath = $@"World\Maps\{mapDir}\{mapDir}_{tileX}_{tileY}.adt";
+                    byte[]? adtBytes = provider.GetFileBytes(adtPath);
+                    if (adtBytes == null)
+                    {
+                        _console?.LogWarning($"ADT not found in MPQ: {adtPath}");
+                        continue;
+                    }
+
+                    var adt = AdtFile.Load(adtBytes);
+                    adt.TileX = tileX;
+                    adt.TileY = tileY;
+
+                    if (!panelSeeded)
+                    {
+                        _gameObjectPanel?.LoadObjects(adt);
+                        _wmoBlacklistPanel?.LoadWmoNames(adt.WmoNames);
+                        _perModelPanel?.LoadModelNames(adt.WmoNames, adt.M2Names);
+                        panelSeeded = true;
+                    }
+
+                    _renderer.LoadWorldObjects(provider, adt, clearExisting: false);
+                    _renderer.LoadTerrain(adt, provider, mapDir, includeAdjacentTiles: false, clearExisting: false);
+
+                    adtLoaded++;
+                    totalWmoPlacements += adt.WmoInstances.Length;
+                }
+
+                if (adtLoaded == 0)
+                {
+                    _console?.LogWarning("No ADT files were loaded from MPQ for the selected tiles.");
                     return;
                 }
 
-                var adt = AdtFile.Load(adtBytes);
-                adt.TileX = _currentMesh.TileX;
-                adt.TileY = _currentMesh.TileY;
-                _gameObjectPanel?.LoadObjects(adt);
-                _wmoBlacklistPanel?.LoadWmoNames(adt.WmoNames);
-                _perModelPanel?.LoadModelNames(adt.WmoNames, adt.M2Names);
-                _renderer.LoadWorldObjects(provider, adt);
-
-                // Auto-load terrain for the current tile only.
-                _renderer.LoadTerrain(adt, provider, mapDir, includeAdjacentTiles: false);
-
-                int wmoCount = adt.WmoInstances.Length;
-                _console?.LogSuccess($"Loaded {wmoCount} WMO placements from ADT");
+                _console?.LogSuccess($"Loaded ADT scene for {adtLoaded}/{tilesToLoad.Count} tile(s), {totalWmoPlacements} WMO placements total");
             }
             catch (Exception ex)
             {
@@ -1176,35 +1291,55 @@ namespace MeshViewer3D.UI
                 return;
             }
 
-            string adtPath = $"World\\Maps\\{mapDir}\\{mapDir}_{_currentMesh.TileX}_{_currentMesh.TileY}.adt";
-            _console?.Log($"Loading terrain from ADT: {adtPath}...");
+            var tilesToLoad = _loadedTileCoords.Count > 0
+                ? _loadedTileCoords.Distinct().ToList()
+                : new List<(int TileX, int TileY)> { (_currentMesh.TileX, _currentMesh.TileY) };
+
+            _console?.Log($"Loading terrain from ADT for {tilesToLoad.Count} tile(s)...");
 
             try
             {
                 using var provider = WowDataProvider.Open(_wowDataPath);
-                byte[]? adtBytes = provider.GetFileBytes(adtPath);
-                if (adtBytes == null)
+
+                int loadedTerrainTiles = 0;
+                bool includeAdjacent = tilesToLoad.Count == 1;
+                bool firstTerrainTile = true;
+
+                foreach (var (tileX, tileY) in tilesToLoad)
                 {
-                    _console?.LogError($"ADT not found in MPQ: {adtPath}");
+                    string adtPath = $"World\\Maps\\{mapDir}\\{mapDir}_{tileX}_{tileY}.adt";
+                    byte[]? adtBytes = provider.GetFileBytes(adtPath);
+                    if (adtBytes == null)
+                    {
+                        _console?.LogWarning($"ADT not found in MPQ: {adtPath}");
+                        continue;
+                    }
+
+                    var adt = AdtFile.Load(adtBytes);
+                    adt.TileX = tileX;
+                    adt.TileY = tileY;
+
+                    int chunkCount = 0;
+                    for (int i = 0; i < adt.TerrainChunks.Length; i++)
+                        if (adt.TerrainChunks[i] != null) chunkCount++;
+
+                    _console?.Log($"  ADT ({tileX},{tileY}) has {chunkCount}/256 terrain chunks, {adt.TextureNames.Length} textures");
+
+                    _renderer.LoadTerrain(adt, provider, mapDir,
+                        includeAdjacentTiles: includeAdjacent,
+                        clearExisting: firstTerrainTile);
+                    firstTerrainTile = false;
+                    loadedTerrainTiles++;
+                }
+
+                if (loadedTerrainTiles == 0)
+                {
+                    _console?.LogWarning("No terrain ADT files were loaded.");
                     return;
                 }
 
-                var adt = AdtFile.Load(adtBytes);
-                adt.TileX = _currentMesh.TileX;
-                adt.TileY = _currentMesh.TileY;
-
-                // Count terrain chunks
-                int chunkCount = 0;
-                for (int i = 0; i < adt.TerrainChunks.Length; i++)
-                    if (adt.TerrainChunks[i] != null) chunkCount++;
-
-                _console?.Log($"  ADT has {chunkCount}/256 terrain chunks, {adt.TextureNames.Length} textures");
-
-                // Manual action: load 3x3 ADT terrain around the current tile.
-                _renderer.LoadTerrain(adt, provider, mapDir, includeAdjacentTiles: true);
-
                 string? mapName = MapDatabase.GetName(_currentMesh.MapId);
-                _console?.LogSuccess($"Terrain loaded for {mapName ?? mapDir} tile ({_currentMesh.TileX},{_currentMesh.TileY})");
+                _console?.LogSuccess($"Terrain loaded for {mapName ?? mapDir}: {loadedTerrainTiles}/{tilesToLoad.Count} tile(s)");
             }
             catch (Exception ex)
             {
@@ -1245,6 +1380,7 @@ namespace MeshViewer3D.UI
 
         private void OnCloseTile(object? sender, EventArgs e)
         {
+            _loadedTileCoords.Clear();
             _currentMesh = null;
             _renderer?.ClearLoadedData();
             ClearTestNavState();

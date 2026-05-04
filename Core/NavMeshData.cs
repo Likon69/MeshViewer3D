@@ -12,6 +12,9 @@ namespace MeshViewer3D.Core
     /// </summary>
     public class NavMeshData
     {
+        // Keep a small headroom under ushort max to avoid accidental overflow when editing/rebaking.
+        public const int MaxMergeVertexCount = 65000;
+
         // Identification
         public string FilePath { get; set; } = string.Empty;
         public int MapId { get; set; }
@@ -231,9 +234,9 @@ namespace MeshViewer3D.Core
             // Safety check: ushort indices max 65535 — abort instead of silently producing corrupt geometry
             int totalVerts = 0;
             foreach (var t in list) totalVerts += t.Vertices.Length;
-            if (totalVerts > 60000)
+            if (totalVerts > MaxMergeVertexCount)
                 throw new InvalidOperationException(
-                    $"Cannot merge {list.Count} tiles: {totalVerts} total vertices exceed the ushort index limit (60000). " +
+                    $"Cannot merge {list.Count} tiles: {totalVerts} total vertices exceed the ushort index limit ({MaxMergeVertexCount}). " +
                     "Load fewer tiles at once.");
 
             var mergedVerts = new List<Vector3>(totalVerts);
