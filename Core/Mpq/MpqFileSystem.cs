@@ -38,10 +38,55 @@ namespace MeshViewer3D.Core.Mpq
                     return ms.ToArray();
                 }
                 catch (FileNotFoundException) { }
-                catch (MpqParserException) { }
-                catch (InvalidDataException) { }
+                catch (MpqParserException ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MPQ] MpqParserException for '{internalPath}' in archive {i}: {ex.Message}");
+                }
+                catch (InvalidDataException ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MPQ] InvalidDataException for '{internalPath}' in archive {i}: {ex.Message}");
+                }
+                catch (NotImplementedException ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MPQ] NotImplementedException for '{internalPath}' in archive {i}: {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[MPQ] Exception for '{internalPath}' in archive {i}: {ex.GetType().Name}: {ex.Message}");
+                }
             }
             return null;
+        }
+
+        /// <summary>
+        /// Diagnostic: returns which archive index contains the file and what error occurs during read, if any.
+        /// Returns a human-readable summary string.
+        /// </summary>
+        public string DiagnoseFile(string internalPath)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(MpqFileSystem));
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"DiagnoseFile: '{internalPath}' across {_stack.Count} archive(s)");
+            for (int i = _stack.Count - 1; i >= 0; i--)
+            {
+                bool exists = _stack[i].FileExists(internalPath);
+                if (!exists) { sb.AppendLine($"  [{i}] FileExists=false"); continue; }
+                sb.Append($"  [{i}] FileExists=true → ");
+                try
+                {
+                    using var stream = _stack[i].OpenFile(internalPath);
+                    using var ms = new MemoryStream((int)stream.Length);
+                    stream.CopyTo(ms);
+                    sb.AppendLine($"Read OK ({ms.Length} bytes)");
+                    return sb.ToString();
+                }
+                catch (Exception ex)
+                {
+                    sb.AppendLine($"Read FAILED: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+            sb.AppendLine("  Not found in any archive.");
+            return sb.ToString();
         }
 
         /// <summary>Returns true if the file exists in any archive.</summary>

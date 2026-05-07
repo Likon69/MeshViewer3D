@@ -1144,6 +1144,9 @@ namespace MeshViewer3D.UI
             try
             {
                 using var provider = WowDataProvider.Open(_wowDataPath);
+                _console?.Log($"[MPQ] {provider.ArchivesLoaded} archives loaded:");
+                foreach (var entry in provider.LoadLog)
+                    _console?.Log($"  {entry}");
                 _renderer.ClearWorldScene();
 
                 bool panelSeeded = false;
@@ -1157,6 +1160,7 @@ namespace MeshViewer3D.UI
                     if (adtBytes == null)
                     {
                         _console?.LogWarning($"ADT not found in MPQ: {adtPath}");
+                        _console?.Log(provider.DiagnoseFile(adtPath));
                         continue;
                     }
 
@@ -1239,6 +1243,7 @@ namespace MeshViewer3D.UI
                 if (wdtBytes == null)
                 {
                     _console?.LogError($"WDT not found in MPQ: {wdtPath}");
+                    _console?.Log(provider.DiagnoseFile(wdtPath));
                     return;
                 }
 

@@ -744,7 +744,28 @@ namespace MeshViewer3D.Rendering
 
             // Render navmesh polygon fill
             if (_showNavMeshFill)
-            {
+                {
+                    // Render terrain heightmap first as opaque base layer (must precede navmesh so depth
+                    // test passes — terrain at GL_LESS equal depth to navmesh would be rejected otherwise).
+                    if (_showTerrain && _terrainRenderers.Count > 0 && _terrainShader != null)
+                    {
+                        if (!_terrainRenderLogged)
+                        {
+                            int totalVerts = 0, totalTris = 0;
+                            foreach (var tr in _terrainRenderers) { totalVerts += tr.TotalVerts; totalTris += tr.TotalTris; }
+                            Log($"Rendering terrain: {_terrainRenderers.Count} tile(s), {totalVerts} verts, {totalTris} tris");
+                            _terrainRenderLogged = true;
+                        }
+
+                        GL.Enable(EnableCap.Blend);
+                        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+                        foreach (var tr in _terrainRenderers)
+                            tr.Render(view, projection, _terrainShader);
+
+                        GL.Disable(EnableCap.Blend);
+                    }
+
                 _meshShader.Use();
                 _meshShader.SetMatrix4("uModel", model);
                 _meshShader.SetMatrix4("uView", view);
@@ -859,26 +880,6 @@ namespace MeshViewer3D.Rendering
             }
 
             // Render terrain heightmap (opaque-ish, drawn before WMO/M2)
-            if (_showTerrain && _terrainRenderers.Count > 0 && _terrainShader != null)
-            {
-                if (!_terrainRenderLogged)
-                {
-                    int totalVerts = 0, totalTris = 0;
-                    foreach (var tr in _terrainRenderers) { totalVerts += tr.TotalVerts; totalTris += tr.TotalTris; }
-                    Log($"Rendering terrain: {_terrainRenderers.Count} tile(s), {totalVerts} verts, {totalTris} tris");
-                    _terrainRenderLogged = true;
-                }
-
-                GL.Enable(EnableCap.Blend);
-                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-                GL.DepthMask(false);
-
-                foreach (var tr in _terrainRenderers)
-                    tr.Render(view, projection, _terrainShader);
-
-                GL.DepthMask(true);
-            }
-
             // Render WMO world objects (semi-transparent, drawn last for correct blending)
             if (_showWmoObjects && _wmoRenderers.Count > 0 && _meshShader != null)
             {

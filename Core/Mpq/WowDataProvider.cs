@@ -40,6 +40,13 @@ namespace MeshViewer3D.Core.Mpq
 
         private WowDataProvider() { }
 
+        /// <summary>
+        /// Human-readable log of every archive attempted during Open(), one line per archive.
+        /// Format: "[OK]" or "[SKIP: reason]" or "[FAIL: exception]"
+        /// </summary>
+        public IReadOnlyList<string> LoadLog => _loadLog;
+        private readonly List<string> _loadLog = new();
+
         public static WowDataProvider Open(string dataPath, string? locale = null)
         {
             if (!Directory.Exists(dataPath))
@@ -56,6 +63,10 @@ namespace MeshViewer3D.Core.Mpq
                 string detectedLocale = Path.GetFileName(localeDir);
                 foreach (string template in LocaleOrder)
                     provider.TryAdd(Path.Combine(localeDir, string.Format(template, detectedLocale)));
+            }
+            else
+            {
+                provider._loadLog.Add("[SKIP: no locale dir found]");
             }
 
             if (provider._fs.ArchiveCount == 0)
@@ -78,17 +89,34 @@ namespace MeshViewer3D.Core.Mpq
             return _fs.FileExists(internalPath);
         }
 
+        /// <summary>
+        /// Returns a diagnostic report for why a file was not found.
+        /// Shows per-archive FileExists result and any read exceptions.
+        /// </summary>
+        public string DiagnoseFile(string internalPath)
+        {
+            if (_disposed) throw new ObjectDisposedException(nameof(WowDataProvider));
+            return _fs.DiagnoseFile(internalPath);
+        }
+
         private void TryAdd(string fullPath)
         {
-            if (!File.Exists(fullPath)) return;
+            string name = Path.GetFileName(fullPath);
+            if (!File.Exists(fullPath))
+            {
+                _loadLog.Add($"[SKIP: not found] {name}");
+                return;
+            }
             try
             {
                 _fs.AddArchive(new MpqArchive(fullPath));
-                Debug.WriteLine($"[MPQ] Loaded: {Path.GetFileName(fullPath)}");
+                _loadLog.Add($"[OK] {name}");
+                Debug.WriteLine($"[MPQ] Loaded: {name}");
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"[MPQ] Skip {Path.GetFileName(fullPath)}: {ex.Message}");
+                _loadLog.Add($"[FAIL: {ex.GetType().Name}: {ex.Message}] {name}");
+                Debug.WriteLine($"[MPQ] Skip {name}: {ex.Message}");
             }
         }
 

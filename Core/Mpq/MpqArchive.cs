@@ -186,7 +186,7 @@ namespace MpqLib
 
         public MpqArchive(string filename)
         {
-            BaseStream = File.Open(filename, FileMode.Open, FileAccess.Read);
+            BaseStream = File.Open(filename, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
             Init();
         }
 

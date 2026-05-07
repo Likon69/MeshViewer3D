@@ -208,9 +208,9 @@ namespace MeshViewer3D.Rendering
             // M = Rx(ax) * Ry(ay) * Rz(az)
             return new float[,]
             {
-                {  cy*cz,               cy*sz,              -sy    },
-                {  sx*sy*cz - cx*sz,    sx*sy*sz + cx*cz,    sx*cy },
-                {  cx*sy*cz + sx*sz,    cx*sy*sz - sx*cz,    cx*cy }
+                {  cy*cz,              -cy*sz,               sy    },
+                {  sx*sy*cz + cx*sz,  -sx*sy*sz + cx*cz,   -sx*cy },
+                { -cx*sy*cz + sx*sz,   cx*sy*sz + sx*cz,    cx*cy }
             };
         }
 
