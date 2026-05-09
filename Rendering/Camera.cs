@@ -4,181 +4,162 @@ using OpenTK.Mathematics;
 namespace MeshViewer3D.Rendering
 {
     /// <summary>
-    /// Caméra orbite professionnelle style Honorbuddy
-    /// Contrôles: Molette=zoom, Middle/Left drag=orbite, Right drag=pan
+    /// Blender-style orbit camera with pivot-centric controls.
+    /// Kept API-compatible with legacy MainForm camera calls.
     /// </summary>
     public class Camera
     {
-        // État de la caméra
+        // Primary state
         public Vector3 Target { get; set; } = Vector3.Zero;
         public float Distance { get; set; } = 500f;
-        public float Yaw { get; set; } = 45f;           // Rotation horizontale (degrés)
-        public float Pitch { get; set; } = 45f;         // Rotation verticale (degrés)
+        public float Yaw { get; set; } = -MathHelper.PiOver2;
+        public float Pitch { get; set; } = 0.4f;
+
+        // Projection settings
+        public float FieldOfView { get; set; } = MathHelper.DegreesToRadians(45f);
+        public float NearPlane { get; set; } = 0.5f;
+        public float FarPlane { get; set; } = 50000f;
+
+        // Backward compatibility with existing UI options
         public bool FreeCameraMode { get; set; } = false;
-
-        // Limites
-        public float MinDistance { get; set; } = 0.01f;
-        public float MaxDistance { get; set; } = 1000000f;
-        public float MinPitch { get; set; } = -89f;
-        public float MaxPitch { get; set; } = 89f;
-
-        // Vitesses
-        public float OrbitSensitivity { get; set; } = 0.3f;
-        public float PanSensitivity { get; set; } = 0.5f;
-        public float ZoomSensitivity { get; set; } = 0.1f;
         public float FreeMoveSpeed { get; set; } = 420f;
         public float PrecisionMultiplier { get; set; } = 0.25f;
 
-        /// <summary>
-        /// Applique rotation orbite (mouse drag)
-        /// </summary>
-        public void Orbit(float deltaX, float deltaY)
+        private const float MaxPitch = MathHelper.PiOver2 - 0.01f;
+        private const float MinDist = 1f;
+        private const float StepFactor = 0.12f;
+
+        public Vector3 Forward
         {
-            Yaw += deltaX * OrbitSensitivity;
-            Pitch -= deltaY * OrbitSensitivity;
-
-            // Normaliser Yaw
-            while (Yaw > 360f) Yaw -= 360f;
-            while (Yaw < 0f) Yaw += 360f;
-
-            // Clamp Pitch
-            Pitch = Math.Clamp(Pitch, MinPitch, MaxPitch);
+            get
+            {
+                var f = new Vector3(
+                    MathF.Cos(Pitch) * MathF.Cos(Yaw),
+                    MathF.Sin(Pitch),
+                    MathF.Cos(Pitch) * MathF.Sin(Yaw));
+                return f.LengthSquared > 1e-8f ? Vector3.Normalize(f) : Vector3.UnitZ;
+            }
         }
 
-        /// <summary>
-        /// Applique pan (déplacement du target)
-        /// </summary>
-        public void Pan(float deltaX, float deltaY)
+        public Vector3 Right
         {
-            var right = GetRightVector();
-            var up = GetUpVector();
-
-            float panSpeed = Distance * PanSensitivity * 0.001f;
-            if (FreeCameraMode)
-                panSpeed = MathF.Max(0.02f, panSpeed);
-
-            Target += right * (-deltaX * panSpeed);
-            Target += up * (deltaY * panSpeed);
+            get
+            {
+                var r = Vector3.Cross(Forward, Vector3.UnitY);
+                return r.LengthSquared > 1e-8f ? Vector3.Normalize(r) : Vector3.UnitX;
+            }
         }
 
-        /// <summary>
-        /// Applique zoom (molette souris)
-        /// </summary>
-        public void Zoom(float delta)
+        public Vector3 Up
         {
+            get
+            {
+                var u = Vector3.Cross(Right, Forward);
+                return u.LengthSquared > 1e-8f ? Vector3.Normalize(u) : Vector3.UnitY;
+            }
+        }
+
+        public Vector3 Eye => Target - Forward * Distance;
+        public Vector3 LookAt => Target;
+        public Vector3 EyePosition => Eye;
+
+        public Matrix4 GetViewMatrix() => Matrix4.LookAt(Eye, Target, Vector3.UnitY);
+
+        public Matrix4 GetProjectionMatrix(float aspectRatio)
+            => Matrix4.CreatePerspectiveFieldOfView(FieldOfView, aspectRatio, NearPlane, FarPlane);
+
+        public void Orbit(float deltaYaw, float deltaPitch)
+        {
+            Yaw += deltaYaw;
+            Pitch = Math.Clamp(Pitch - deltaPitch, -MaxPitch, MaxPitch);
+        }
+
+        public void Pan(float deltaScreenX, float deltaScreenY)
+        {
+            float speed = Distance * 0.0015f;
+            Target -= Right * (deltaScreenX * speed);
+            Target += Up * (deltaScreenY * speed);
+        }
+
+        public void ZoomTowardPoint(Vector3 hitPoint, float steps)
+        {
+            float normalizedSteps = MathF.Abs(steps) > 10f ? steps / 120f : steps;
+            if (MathF.Abs(normalizedSteps) < 1e-6f)
+                return;
+
+            float factor = normalizedSteps > 0f
+                ? MathF.Pow(1f - StepFactor, normalizedSteps)
+                : MathF.Pow(1f + StepFactor, -normalizedSteps);
+
+            float prevDist = Math.Max(Distance, MinDist);
+            float newDist = Math.Clamp(prevDist * factor, MinDist, FarPlane * 0.9f);
+            float t = 1f - (newDist / prevDist);
+
+            Target += (hitPoint - Target) * (t * 0.5f);
+            Distance = newDist;
+        }
+
+        // Backward-compatible zoom entrypoint (mouse wheel delta or synthetic steps)
+        public void Zoom(float steps)
+        {
+            float normalizedSteps = MathF.Abs(steps) > 10f ? steps / 120f : steps;
+            if (MathF.Abs(normalizedSteps) < 1e-6f)
+                return;
+
             if (FreeCameraMode)
             {
-                // Free camera: dolly along current view direction instead of clamping orbit distance.
-                float direction = delta > 0 ? 1f : -1f;
-                float dollyStep = MathF.Max(0.5f, Distance * 0.08f);
-                Target += GetForwardVector() * (direction * dollyStep);
+                float direction = normalizedSteps > 0f ? 1f : -1f;
+                float dollyStep = MathF.Max(0.5f, Distance * 0.08f) * MathF.Abs(normalizedSteps);
+                Target += Forward * (direction * dollyStep);
                 return;
             }
 
-            float factor = delta > 0 ? (1f - ZoomSensitivity) : (1f + ZoomSensitivity);
-            Distance *= factor;
-            Distance = Math.Clamp(Distance, MinDistance, MaxDistance);
+            float factor = normalizedSteps > 0f
+                ? MathF.Pow(1f - StepFactor, normalizedSteps)
+                : MathF.Pow(1f + StepFactor, -normalizedSteps);
+            Distance = Math.Clamp(Distance * factor, MinDist, FarPlane * 0.9f);
         }
 
-        /// <summary>
-        /// Calcule la matrice View pour OpenGL
-        /// </summary>
-        public Matrix4 GetViewMatrix()
+        public void FrameBounds(Vector3 bMin, Vector3 bMax, float marginFactor = 1.3f)
         {
-            var eye = GetEyePosition();
-            return Matrix4.LookAt(eye, Target, Vector3.UnitY);
+            Target = (bMin + bMax) * 0.5f;
+            float radius = (bMax - bMin).Length * 0.5f;
+            Distance = Math.Max((radius / MathF.Sin(FieldOfView * 0.5f)) * marginFactor, MinDist);
         }
 
-        /// <summary>
-        /// Calcule la position de l'œil de la caméra
-        /// </summary>
-        public Vector3 GetEyePosition()
-        {
-            float yawRad = MathHelper.DegreesToRadians(Yaw);
-            float pitchRad = MathHelper.DegreesToRadians(Pitch);
+        public void SetFrontView() => (Yaw, Pitch) = (-MathHelper.PiOver2, 0f);
+        public void SetBackView() => (Yaw, Pitch) = (MathHelper.PiOver2, 0f);
+        public void SetRightView() => (Yaw, Pitch) = (0f, 0f);
+        public void SetLeftView() => (Yaw, Pitch) = (MathHelper.Pi, 0f);
+        public void SetTopView() => (Yaw, Pitch) = (-MathHelper.PiOver2, -MaxPitch);
+        public void SetBottomView() => (Yaw, Pitch) = (-MathHelper.PiOver2, MaxPitch);
 
-            // Direction depuis target vers eye
-            var forward = new Vector3(
-                MathF.Cos(pitchRad) * MathF.Sin(yawRad),
-                MathF.Sin(pitchRad),
-                MathF.Cos(pitchRad) * MathF.Cos(yawRad)
-            );
+        // Legacy helpers used in the existing codebase
+        public Vector3 GetEyePosition() => Eye;
+        public Vector3 GetForwardVector() => Forward;
+        public Vector3 GetRightVector() => Right;
+        public Vector3 GetUpVector() => Up;
 
-            return Target - forward * Distance;
-        }
-
-        /// <summary>
-        /// Calcule le vecteur forward (direction de vue)
-        /// </summary>
-        public Vector3 GetForwardVector()
-        {
-            float yawRad = MathHelper.DegreesToRadians(Yaw);
-            float pitchRad = MathHelper.DegreesToRadians(Pitch);
-
-            return new Vector3(
-                MathF.Cos(pitchRad) * MathF.Sin(yawRad),
-                MathF.Sin(pitchRad),
-                MathF.Cos(pitchRad) * MathF.Cos(yawRad)
-            );
-        }
-
-        /// <summary>
-        /// Calcule le vecteur right (droite de la caméra)
-        /// </summary>
-        public Vector3 GetRightVector()
-        {
-            float yawRad = MathHelper.DegreesToRadians(Yaw);
-            return new Vector3(
-                MathF.Cos(yawRad),
-                0f,
-                -MathF.Sin(yawRad)
-            );
-        }
-
-        /// <summary>
-        /// Calcule le vecteur up (haut de la caméra)
-        /// </summary>
-        public Vector3 GetUpVector()
-        {
-            var forward = GetForwardVector();
-            var right = GetRightVector();
-            var cross = Vector3.Cross(right, forward);
-            return Vector3.Normalize(cross);
-        }
-
-        /// <summary>
-        /// Recentre la caméra sur une position
-        /// </summary>
         public void FocusOn(Vector3 target, float? distance = null)
         {
             Target = target;
             if (distance.HasValue)
-                Distance = Math.Clamp(distance.Value, MinDistance, MaxDistance);
+                Distance = Math.Clamp(distance.Value, MinDist, FarPlane * 0.9f);
         }
 
-        /// <summary>
-        /// Translate la caméra libre dans son espace local.
-        /// forward/right/up: unités monde à appliquer.
-        /// </summary>
         public void TranslateLocal(float forward, float right, float up)
         {
-            var forwardVec = GetForwardVector();
-            var rightVec = GetRightVector();
-            var upVec = Vector3.UnitY;
-            Target += forwardVec * forward;
-            Target += rightVec * right;
-            Target += upVec * up;
+            Target += Forward * forward;
+            Target += Right * right;
+            Target += Vector3.UnitY * up;
         }
 
-        /// <summary>
-        /// Reset la caméra à une vue par défaut
-        /// </summary>
         public void Reset()
         {
             Target = Vector3.Zero;
             Distance = 500f;
-            Yaw = 45f;
-            Pitch = 45f;
+            Yaw = -MathHelper.PiOver2;
+            Pitch = 0.4f;
         }
     }
 }

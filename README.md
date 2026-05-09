@@ -40,7 +40,8 @@ dotnet run
 2. Press **B** to enter blackspot placement, click on terrain
 3. Press **J** to enter jump link mode, click start then end
 4. Press **V** to enter volume mode, click vertices, press **Enter** to finalize
-5. **Ctrl+S** to save
+5. Use the new camera controls: middle mouse to orbit, `Shift+Middle` or right mouse to pan, scroll to zoom toward the cursor
+6. **Ctrl+S** to save
 
 ---
 
@@ -67,7 +68,7 @@ dotnet run
 | WMO Blacklist | **Done** | CheckedListBox, Select All/Deselect All, Export/Import |
 | Per-Model Overrides | **Done** | Per-model volume/collision settings, JSON Export/Import |
 | M2 model rendering | **Done** | Bounding geometry parser (0xD8 offsets), same coordinate pipeline as WMO |
-| Terrain heightmap (ADT MCNK) | **Done** | ADT MCNK chunks → UV-textured OpenGL mesh, height-correct ground geometry |
+| Terrain heightmap (ADT MCNK) | **Done** | ADT MCNK chunks → UV-textured OpenGL mesh, height-correct ground geometry, automatic center-tile load + optional 3×3 terrain grid |
 | BLP texture loading | **Done** | MPQ → BlpFile.Load → GlTexture.FromBlp, per-layer texture draw groups |
 | WDT parser (world tile index) | **Done** | WDT tile existence grid, minimap tile highlighting |
 | NavMesh Fill toggle | **Done** | Settings panel checkbox — show/hide navmesh polygon fill |
@@ -81,11 +82,14 @@ dotnet run
 
 | Action | Input |
 |--------|-------|
-| Orbit | Middle mouse drag or Left mouse drag |
-| Pan | Right mouse drag |
-| Zoom | Scroll wheel |
-| Reset | `R` or `Home` |
+| Orbit | Middle mouse drag |
+| Pan | `Shift+Middle` drag or Right mouse drag |
+| Zoom | Scroll wheel, zooms toward the cursor hit point |
+| Frame scene | `R` or `Home` |
+| View presets | Numpad `1` / `3` / `7` and `Ctrl` variants |
 | Focus selection | `F` |
+
+The old left-drag camera orbit is no longer used. Camera navigation now follows the Blender-style controller.
 
 ### Editing
 

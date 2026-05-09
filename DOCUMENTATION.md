@@ -34,7 +34,7 @@
 
 MeshViewer3D is a 3D navigation mesh viewer and editor for WoW 3.3.5a, recreating the functionality of Honorbuddy's **Tripper.Renderer**. It loads Detour/Recast `.mmtile` navigation tiles and provides tools to create, edit, and serialise navigation data: blackspots, jump links, and convex volumes.
 
-The application also reads WoW MPQ archives directly (pure C#, no native DLLs) to display WMO building geometry and M2 doodad bounding geometry in the 3D scene, giving spatial context when editing navigation data.
+The application also reads WoW MPQ archives directly (pure C#, no native DLLs) to display WMO building geometry, M2 doodad bounding geometry, and terrain heightmaps in the 3D scene, giving spatial context when editing navigation data.
 
 ---
 
@@ -57,7 +57,7 @@ dotnet run
 ```
 
 1. **Map > Load Tile** — select a single `.mmtile` file, or **Load Folder** to load all tiles in a directory.
-2. The navmesh appears as colored polygons. Use middle-mouse to orbit, right-mouse to pan, scroll to zoom.
+2. The navmesh appears as colored polygons. Use the Blender-style camera: middle-mouse to orbit, `Shift+Middle` or right-mouse to pan, scroll to zoom toward the cursor.
 3. Press **B**, **J**, or **V** to enter an editing mode. Press **Q** or **Escape** to return to navigation.
 4. Save your work via **Mesh** menu or **Ctrl+S**.
 
@@ -67,12 +67,15 @@ dotnet run
 
 | Action | Input |
 |--------|-------|
-| Orbit | Middle mouse drag or Left mouse drag |
-| Pan | Right mouse drag |
-| Zoom | Scroll wheel |
-| Reset camera | `R` or `Home` |
+| Orbit | Middle mouse drag |
+| Pan | `Shift+Middle` drag or Right mouse drag |
+| Zoom | Scroll wheel, zooms toward the cursor hit point |
+| Frame scene | `R` or `Home` |
+| View presets | Numpad `1` / `3` / `7` and `Ctrl` variants |
 | Focus selection | `F` |
 | Go to coordinates | `G` (opens dialog) |
+
+The old left-drag orbit movement is no longer active. Camera navigation now goes through the dedicated controller.
 
 ---
 
@@ -388,12 +391,14 @@ This manual 3×3 mode provides seamless terrain coverage around the active tile 
 - Neighbour tiles are loaded silently; missing tiles are skipped without error.
 - All loaded `TerrainRenderer` instances share the same shader and are drawn in the same pass.
 
+These terrain levels are independent from the navmesh tile itself, so you can keep the current navigation tile selected while switching the surrounding terrain context on or off.
+
 ### Setup
 
 1. **Map > Set WoW Data Folder...** — point to the WoW 3.3.5a `Data/` folder.
 2. Load any `.mmtile` tile. The center-tile terrain appears automatically beneath the navmesh.
 3. Optional: use **Map > Load Terrain from ADT...** to load the full 3×3 surrounding terrain grid.
-3. Toggle terrain visibility with the **Terrain Heightmap** checkbox in the Settings panel.
+4. Toggle terrain visibility with the **Terrain Heightmap** checkbox in the Settings panel.
 
 ### Technical details
 

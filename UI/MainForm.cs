@@ -24,6 +24,7 @@ namespace MeshViewer3D.UI
         // Composants OpenGL
         private GLControl? _glControl;
         private Camera _camera = new Camera();
+        private CameraController? _cameraController;
         private NavMeshRenderer? _renderer;
 
         // Composants UI
@@ -129,6 +130,13 @@ namespace MeshViewer3D.UI
         private void MainForm_KeyDown(object? sender, KeyEventArgs e)
         {
             _pressedKeys.Add(e.KeyCode);
+
+            if (_cameraController != null && _cameraController.OnKeyDown(e))
+            {
+                _glControl?.Invalidate();
+                e.Handled = true;
+                return;
+            }
 
             if (_camera.FreeCameraMode && !e.Control && !e.Alt)
             {
@@ -679,10 +687,79 @@ namespace MeshViewer3D.UI
             _renderTimer.Start();
 
             // Focus camera default
-            _camera.Target = Vector3.Zero;
-            _camera.Distance = 500f;
-            _camera.Yaw = 45f;
-            _camera.Pitch = 45f;
+            _camera.Reset();
+            InitializeCameraController();
+        }
+
+        private void InitializeCameraController()
+        {
+            _cameraController = new CameraController(
+                _camera,
+                (screenX, screenY) => RaycastNavMeshPoint(screenX, screenY),
+                () => GetCurrentSceneBounds());
+        }
+
+        private (Vector3 bMin, Vector3 bMax)? GetCurrentSceneBounds()
+        {
+            if (_currentMesh == null)
+                return null;
+
+            return (_currentMesh.Header.BMin, _currentMesh.Header.BMax);
+        }
+
+        private Vector3? RaycastNavMeshPoint(int screenX, int screenY)
+        {
+            if (_glControl == null || _currentMesh == null)
+                return null;
+
+            var view = _camera.GetViewMatrix();
+            var projection = _camera.GetProjectionMatrix(
+                (float)_glControl.Width / _glControl.Height);
+
+            var ray = Rendering.RayCaster.ScreenToWorldRay(
+                screenX, screenY,
+                _glControl.Width, _glControl.Height,
+                view, projection
+            );
+
+            float closestDistance = float.MaxValue;
+            Vector3 closestHit = Vector3.Zero;
+            bool foundHit = false;
+
+            for (int i = 0; i < _currentMesh.Polys.Length; i++)
+            {
+                var poly = _currentMesh.Polys[i];
+                if (poly.VertCount < 3) continue;
+
+                for (int j = 1; j < poly.VertCount - 1; j++)
+                {
+                    var v0 = _currentMesh.Vertices[poly.Verts[0]];
+                    var v1 = _currentMesh.Vertices[poly.Verts[j]];
+                    var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+
+                    if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
+                    {
+                        if (dist < closestDistance)
+                        {
+                            closestDistance = dist;
+                            closestHit = hit;
+                            foundHit = true;
+                        }
+                    }
+
+                    if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v2, v1, out float dist2, out Vector3 hit2))
+                    {
+                        if (dist2 < closestDistance)
+                        {
+                            closestDistance = dist2;
+                            closestHit = hit2;
+                            foundHit = true;
+                        }
+                    }
+                }
+            }
+
+            return foundHit ? closestHit : null;
         }
 
         private void GlControl_Load(object? sender, EventArgs e)
@@ -778,6 +855,12 @@ namespace MeshViewer3D.UI
                 PlaceBlackspotAtCursor(e.X, e.Y);
                 return;
             }
+
+            if (_cameraController != null && _cameraController.OnMouseDown(e, ModifierKeys))
+            {
+                _isDragging = false;
+                return;
+            }
             
             // Mode normal : sélection de blackspot
             if (e.Button == MouseButtons.Left && !_blackspotClickMode)
@@ -794,11 +877,11 @@ namespace MeshViewer3D.UI
                     _isDragging = false; // Prévenir drag caméra
                     return;
                 }
+
+                return;
             }
-            
-            _isDragging = true;
-            _dragButton = e.Button;
-            _lastMousePos = e.Location;
+
+            _isDragging = false;
         }
 
         private void GlControl_MouseMove(object? sender, MouseEventArgs e)
@@ -816,31 +899,19 @@ namespace MeshViewer3D.UI
                 _lastMousePos = e.Location;
                 return;
             }
-            
+
+            if (_cameraController != null && _cameraController.OnMouseMove(e, ModifierKeys))
+            {
+                return;
+            }
+
             if (!_isDragging) return;
-
-            float dx = e.X - _lastMousePos.X;
-            float dy = e.Y - _lastMousePos.Y;
-            _lastMousePos = e.Location;
-
-            if (_camera.FreeCameraMode && ModifierKeys.HasFlag(Keys.Shift))
-            {
-                dx *= _camera.PrecisionMultiplier;
-                dy *= _camera.PrecisionMultiplier;
-            }
-
-            if (_dragButton == MouseButtons.Middle || _dragButton == MouseButtons.Left)
-            {
-                _camera.Orbit(dx, dy);
-            }
-            else if (_dragButton == MouseButtons.Right)
-            {
-                _camera.Pan(dx, dy);
-            }
         }
 
         private void GlControl_MouseUp(object? sender, MouseEventArgs e)
         {
+            _cameraController?.OnMouseUp(e);
+
             if (_isDraggingBlackspot && _draggedBlackspotIndex >= 0 
                 && _draggedBlackspotIndex < _editableElements.Blackspots.Count)
             {
@@ -892,8 +963,8 @@ namespace MeshViewer3D.UI
             }
             
             // Sinon : zoom caméra
-            if (_camera.FreeCameraMode && ModifierKeys.HasFlag(Keys.Shift))
-                _camera.Zoom(e.Delta * _camera.PrecisionMultiplier);
+            if (_cameraController != null)
+                _cameraController.OnMouseWheel(e);
             else
                 _camera.Zoom(e.Delta);
         }
@@ -918,8 +989,8 @@ namespace MeshViewer3D.UI
                     _loadedTileCoords.Add((_currentMesh.TileX, _currentMesh.TileY));
                     _renderer?.LoadMesh(_currentMesh);
                     
-                    // Focus camera sur la tile
-                    _camera.FocusOn(_currentMesh.GetCenterDetour(), 500f);
+                    // Frame scene from bounds (no fixed magic distance)
+                    _cameraController?.FrameScene();
                     
                     // Update minimap
                     _minimap?.Clear();
@@ -1075,7 +1146,7 @@ namespace MeshViewer3D.UI
 
             _currentMesh = NavMeshData.Merge(meshesToMerge);
             _renderer?.LoadMesh(_currentMesh);
-            _camera.FocusOn(_currentMesh.GetCenterDetour(), 800f);
+            _cameraController?.FrameScene();
             _minimap?.SetCurrentTile(_currentMesh.TileX, _currentMesh.TileY);
 
             _console?.LogSuccess($"Loaded {meshesToMerge.Count} tiles" +
@@ -1428,7 +1499,7 @@ namespace MeshViewer3D.UI
         {
             if (_currentMesh != null)
             {
-                _camera.FocusOn(_currentMesh.GetCenterDetour(), 500f);
+                _cameraController?.FrameScene();
             }
             else
             {
@@ -1957,7 +2028,8 @@ namespace MeshViewer3D.UI
             // Info overlay flottant
             if (_overlayLabel != null && _currentMesh != null)
             {
-                var wowPos = CoordinateSystem.DetourToWow(_camera.Target);
+                var wowTarget = CoordinateSystem.DetourToWow(_camera.Target);
+                var wowEye = CoordinateSystem.DetourToWow(_camera.GetEyePosition());
                 string modeText = _blackspotClickMode ? "\n[CLICK MODE - Place Blackspot]"
                     : _jumpLinkClickMode ? $"\n[CLICK MODE - Place Jump Link {(_jumpLinksPanel?.PendingStartPoint == null ? "Start" : "End")}]"
                     : _volumeClickMode ? $"\n[VOLUME MODE - {_volumesPanel?.InProgressVertices.Count ?? 0} vertices (Enter to finalize)]"
@@ -1992,7 +2064,8 @@ namespace MeshViewer3D.UI
                     }
                 }
 
-                _overlayLabel.Text = $"Pos: {{{wowPos.X:F1}, {wowPos.Y:F1}, {wowPos.Z:F1}}}\n" +
+                _overlayLabel.Text = $"Target: {{{wowTarget.X:F1}, {wowTarget.Y:F1}, {wowTarget.Z:F1}}}\n" +
+                                     $"Eye: {{{wowEye.X:F1}, {wowEye.Y:F1}, {wowEye.Z:F1}}}\n" +
                                      $"Tile: ({_currentMesh.TileX}, {_currentMesh.TileY})\n" +
                                      $"Polys: {_currentMesh.Polys.Length} | Verts: {_currentMesh.Vertices.Length}\n" +
                                      $"Blackspots: {_editableElements.Blackspots.Count} | Volumes: {_editableElements.ConvexVolumes.Count}\n" +
@@ -2545,7 +2618,7 @@ namespace MeshViewer3D.UI
             }
             else if (_currentMesh != null)
             {
-                _camera.FocusOn(_currentMesh.GetCenterDetour(), 500f);
+                _cameraController?.FrameScene();
                 _console?.Log("Focused on mesh center (no selection)");
             }
             else
