@@ -238,21 +238,28 @@ namespace MeshViewer3D.UI
                 FogDensityChanged?.Invoke(this, _trkFog.Value);
             };
             this.Controls.Add(_trkFog);
-            y += 50;
+            y += 70;
 
             // === INFO ===
             var lblInfo = new Label
             {
-                Text = "Keyboard Shortcuts:\n" +
-                       "W - Toggle Wireframe\n" +
-                       "L - Toggle Lighting\n" +
-                       "R - Reset Camera\n" +
-                       "B - Blackspot Mode\n" +
-                       "J - Jump Link Mode\n" +
-                       "V - Volume Mode\n" +
-                       "Q - Navigation Mode",
+                Text = "Camera:\n" +
+                       "MMB drag - Orbit\n" +
+                       "Shift+MMB / RMB - Pan\n" +
+                       "Ctrl+MMB / Wheel - Zoom\n" +
+                       "F - Focus | R/Home - Frame\n" +
+                       "C - Toggle free camera\n" +
+                       "Free cam: W/A/S/D/Q/E move\n\n" +
+                       "Shortcuts:\n" +
+                       "B / J / V - Edit modes\n" +
+                       "Enter - Finalize volume\n" +
+                       "Esc - Cancel | Del - Delete\n" +
+                       "G - Go to coordinates\n" +
+                       "W / L - View toggles\n" +
+                       "Ctrl+S/O/N - Blackspots\n" +
+                       "Ctrl+Z/Y - Undo / Redo",
                 Location = new Point(10, y),
-                Size = new Size(210, 130),
+                Size = new Size(210, 220),
                 ForeColor = Color.Gray
             };
             this.Controls.Add(lblInfo);
