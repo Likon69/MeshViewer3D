@@ -84,12 +84,14 @@ dotnet run
 |--------|-------|
 | Orbit | Middle mouse drag |
 | Pan | `Shift+Middle` drag or Right mouse drag |
-| Zoom | Scroll wheel, zooms toward the cursor hit point |
+| Zoom | Scroll wheel or `Ctrl+Middle` drag |
 | Frame scene | `R` or `Home` |
 | View presets | Numpad `1` / `3` / `7` and `Ctrl` variants |
 | Focus selection | `F` |
+| Toggle free camera | `C` |
+| Free camera move | `W` / `A` / `S` / `D` / `Q` / `E` |
 
-The old left-drag camera orbit is no longer used. Camera navigation now follows the Blender-style controller.
+The old left-drag camera orbit is no longer used. Camera navigation follows a Blender-style controller, and free camera movement uses `Q/E` for vertical motion while active.
 
 ### Editing
 
@@ -103,6 +105,10 @@ The old left-drag camera orbit is no longer used. Camera navigation now follows 
 | `Q` | Return to navigation mode (disable all edit modes) |
 | `Delete` | Delete selected element |
 | `G` | Go to coordinates dialog |
+| `F` | Focus current selection |
+| `C` | Toggle free camera mode |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` or `Ctrl+Shift+Z` | Redo |
 | `Shift+Wheel` | Adjust blackspot radius |
 | `Ctrl+Wheel` | Adjust blackspot height |
 
