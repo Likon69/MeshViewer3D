@@ -11,11 +11,30 @@
 
 MeshViewer3D loads Detour/Recast `.mmtile` navigation tiles and provides tools to:
 
-- **View** navmesh polygons with area-type coloring, wireframe, and OffMesh connections
-- **Edit blackspots** — cylindrical no-go zones (compatible with Honorbuddy XML format)
-- **Create jump links** — custom OffMesh connections between two points (XML + binary `.offmesh`)
-- **Define convex volumes** — polygonal areas with custom area types (XML)
-- **Visualise WMO buildings** — loads WMO geometry from MPQ archives via ADT tile references
+### Rendering
+- **NavMesh polygons** — area-type color coding (walkable/water/road/obstacle/…), wireframe, polygon fill, per-component coloring
+- **OffMesh connections** — parabolic arc display with directional arrowhead and start-circle marker; cyan = bidirectional, orange = unidirectional
+- **Tile seam borders** — thick dark-green edge lines at boundaries between loaded tiles, making multi-tile topology immediately readable
+- **WMO buildings** — full 3D geometry from MPQ archives via ADT MODF placements
+- **M2 doodads** — bounding geometry for placed models (same coordinate pipeline as WMO)
+- **Terrain heightmap** — ADT MCNK chunks rendered as a UV-textured, height-correct ground mesh; center tile + optional 3×3 grid
+
+### Navigation debug
+- **Raytrace mode** — click anywhere to place a precision target reticle (ring + arms + stem); overlay shows WoW coords, tile, polygon index and area type
+- **Test Navigation** — click to set A and B, runs A* + Funnel algorithm with off-mesh traversal, path rendered as dark dashed lines with Start/End screen labels
+- **NavMesh Analysis** — BFS connected-component detection with distinct per-component colors (`A` key)
+
+### Editing
+- **Blackspots** — cylindrical no-go zones; click to place, drag to move, scroll to resize; Honorbuddy XML compatible
+- **Jump Links** — two-click custom OffMesh connections; XML + binary `.offmesh` + CSV export
+- **Convex Volumes** — click vertices, `Enter` to finalize; per-volume area type; XML save/load
+- **Undo / Redo** — full command history for all edit operations (`Ctrl+Z` / `Ctrl+Y`)
+
+### UI
+- **Live overlay** — WoW coords, current tile (follows camera), polygon count, FPS, active mode
+- **Minimap** — 64×64 tile grid; loaded tiles shown in green; camera position tracked in real time with a red dot and `<X, Y>` label
+- **WMO Blacklist** — hide individual WMO models from the viewport
+- **Per-Model Overrides** — per-model volume/collision settings, JSON Export/Import
 
 All coordinate display is in WoW world space. Internal storage uses Detour coordinates.
 
@@ -36,43 +55,13 @@ cd MeshViewer3D
 dotnet run
 ```
 
-1. **Map > Load Tile** or **Load Folder** — select `.mmtile` file(s)
-2. Press **B** to enter blackspot placement, click on terrain
-3. Press **J** to enter jump link mode, click start then end
-4. Press **V** to enter volume mode, click vertices, press **Enter** to finalize
-5. Use the new camera controls: middle mouse to orbit, `Shift+Middle` or right mouse to pan, scroll to zoom toward the cursor
-6. **Ctrl+S** to save
-
----
-
-## Feature Status
-
-| Feature | Status | Notes |
-|---------|--------|-------|
-| NavMesh rendering (area colors, wireframe) | **Done** | Multi-tile support with 60k vertex safety limit |
-| OffMesh connection display (from tiles) | **Done** | Cyan = bidirectional, Orange = unidirectional |
-| Blackspot editor | **Done** | Click to place, drag to move, scroll to resize, XML save/load |
-| Jump Link editor | **Done** | Two-click placement, XML + `.offmesh` binary save/load, CSV export |
-| Convex Volume editor | **Done** | Click vertices, Enter to finalize, XML save/load |
-| WMO 3D visualization | **Done** | Pure C# MPQ reader, WMO v17 parser, ADT v18 MODF instances. Set Data folder via Map menu |
-| Map directory lookup | **Done** | Dynamic Maps.json database (40 maps, all 3.3.5a), replaces hardcoded 5-map switch |
-| WoW Data path persistence | **Done** | Auto-saved to settings.json, restored on startup with MPQ validation |
-| Go To Coordinates | **Done** | G key, dialog input |
-| Minimap (tile grid) | **Done** | Shows loaded tiles |
-| Settings panel | **Done** | Toggle wireframe/lighting/offmesh/blackspots/volumes, color modes |
-| Raytrace mode | **Done** | 3D cursor marker on navmesh, shows WoW coords + AreaType + poly index |
-| Test Navigation (A→B pathfinding) | **Done** | A* + Funnel Algorithm, cross-tile, off-mesh traversal, smooth paths |
-| NavMesh Analysis | **Done** | Connected components (BFS), degenerate polygon detection, component coloring (A key) |
-| Export Paths | **Done** | JSON, CSV, HB Hotspot XML (Tools menu) |
-| Undo/Redo | **Done** | Ctrl+Z / Ctrl+Y — blackspots, volumes, jump links (Command Pattern) |
-| WMO Blacklist | **Done** | CheckedListBox, Select All/Deselect All, Export/Import |
-| Per-Model Overrides | **Done** | Per-model volume/collision settings, JSON Export/Import |
-| M2 model rendering | **Done** | Bounding geometry parser (0xD8 offsets), same coordinate pipeline as WMO |
-| Terrain heightmap (ADT MCNK) | **Done** | ADT MCNK chunks → UV-textured OpenGL mesh, height-correct ground geometry, automatic center-tile load + optional 3×3 terrain grid |
-| BLP texture loading | **Done** | MPQ → BlpFile.Load → GlTexture.FromBlp, per-layer texture draw groups |
-| WDT parser (world tile index) | **Done** | WDT tile existence grid, minimap tile highlighting |
-| NavMesh Fill toggle | **Done** | Settings panel checkbox — show/hide navmesh polygon fill |
-| 3×3 ADT terrain grid | **Done** | Map > Load Terrain from ADT loads center tile + up to 8 surrounding tiles |
+1. **Map > Load Tile** — single `.mmtile`  
+   **Map > Load Folder** — loads all tiles in a folder (auto-subset near center if vertex limit reached)  
+   **Map > Load Terrain from ADT** — loads ground heightmap for the selected area (center tile + 3×3 optional)
+2. Optionally set **Map > Set WoW Data Folder** to enable WMO/M2/terrain rendering from MPQ archives
+3. Orbit with middle mouse, pan with `Shift+MMB` or right mouse, zoom with scroll wheel
+4. Press **T** to enter raytrace mode — click the mesh to inspect any point
+5. Press **B / J / V** for edit modes; **Ctrl+S** to save
 
 ---
 
