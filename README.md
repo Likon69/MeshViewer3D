@@ -60,7 +60,7 @@ dotnet run
    **Map > Load Terrain from ADT** — loads ground heightmap for the selected area (center tile + 3×3 optional)
 2. Optionally set **Map > Set WoW Data Folder** to enable WMO/M2/terrain rendering from MPQ archives
 3. Orbit with middle mouse, pan with `Shift+MMB` or right mouse, zoom with scroll wheel
-4. Press **T** to enter raytrace mode — click the mesh to inspect any point
+4. Click **Raytrace** in the toolbar to inspect any point on the mesh; click **Test Nav** to set A→B pathfinding points
 5. Press **B / J / V** for edit modes; **Ctrl+S** to save
 
 ---
@@ -108,8 +108,21 @@ The old left-drag camera orbit is no longer used. Camera navigation follows a Bl
 | `Ctrl+O` | Load blackspots XML |
 | `Ctrl+S` | Save blackspots XML |
 | `Ctrl+N` | Clear all blackspots |
+
+### View Toggles
+
+| Key | Action |
+|-----|--------|
 | `W` | Toggle wireframe |
 | `L` | Toggle lighting |
+| `A` | Toggle NavMesh Analysis (connected-component coloring) |
+
+### Debug Modes (toolbar buttons)
+
+| Button | Action |
+|--------|--------|
+| **Raytrace** | Click mesh to inspect point — WoW coords, tile, polygon index, area type |
+| **Test Nav** | Click to set start (A) then end (B) — runs A* + Funnel pathfinding |
 
 ---
 
@@ -148,7 +161,7 @@ All XML coordinates are in **WoW world space** (X=North, Y=West, Z=Up).
 ---
 
 
-### Technologies
+## Technologies
 
 - **.NET 6.0-windows** — WinForms application
 - **OpenTK 4.8.2** — OpenGL 3.3+ bindings
