@@ -104,9 +104,13 @@ Raytrace mode provides real-time cursor inspection of the navmesh. When active, 
 ### Usage
 1. Click the **Raytrace** button in the toolbar (toggles ON/OFF).
 2. Move the mouse over the navmesh.
-3. A **colored 3D cross marker** appears at the exact hit point (RGB axis lines + yellow outer cross for visibility).
+3. A **precision target reticle** appears at the exact hit point:
+   - White 32-segment ring
+   - 4 orange outward arms with a center gap
+   - White vertical stem
 4. The HUD overlay shows:
-   - **WoW coordinates** of the hit point
+   - **WoW coordinates** of the hit point (G7 precision)
+   - **Tile** coordinates of the hit point
    - **Polygon index** in the navmesh
    - **AreaType name and ID** (e.g. `Ground (1)`, `Water (8)`)
 
@@ -127,7 +131,7 @@ Interactive two-click pathfinding on the loaded NavMesh. Computes and displays t
 1. Toggle the **Test Navigation** button in the toolbar (cursor becomes crosshair).
 2. **Left-click** on the mesh to place the **start point** (green cross marker).
 3. **Left-click** again to place the **end point** (red cross marker) — the A\* path is computed immediately.
-4. The resulting path is drawn as a yellow-to-orange line strip on the mesh surface.
+4. The resulting path is drawn as **dark dashed lines** on the mesh surface. Screen-space **START** and **END** labels are anchored to the corresponding world points.
 5. Click again to reset and place a new start point.
 6. Toggle the button OFF to clear all markers and path state.
 
@@ -141,8 +145,8 @@ Interactive two-click pathfinding on the loaded NavMesh. Computes and displays t
 - **Heuristic**: Euclidean distance between polygon centroids.
 - **Edge cost**: Euclidean distance between shared-edge midpoints, with a 2× penalty for non-Ground area types.
 - **Portals**: Built as (left, right) edge endpoint pairs; off-mesh connections use degenerate portals (both endpoints at the connection position).
-- **Rendering**: Yellow-orange gradient line strip (`GL_LINES`), `LineWidth = 4.0`, `DepthTest` disabled, vertices offset `Y + 0.3f` above the mesh surface.
-- **Markers**: Green cross (start) and red cross (end), same offset and rendering settings.
+- **Rendering**: Dark dashed line segments (`GL_LINES`), `LineWidth = 2.0`, `DepthTest` disabled. Each segment alternates drawn/gap to produce the dashed effect.
+- **Markers**: Screen-space **START** / **END** labels (WinForms `Label`) projected from world position each frame via view×projection matrix.
 - **HUD overlay**: Displays `[TEST NAV]` with start coordinates, waypoint count, or "click start/end" prompts.
 - **Console output**: Path distance, waypoint count, and computation time (via `Stopwatch`).
 - **Cleanup**: Toggling OFF or closing a tile calls `ClearTestNavState()` which resets all fields and GPU buffers.
@@ -297,6 +301,26 @@ Jump links from the mmtile data (read-only) are also displayed.
 **Binary (`.offmesh`):** 36 bytes per connection — matches Detour's `dtOffMeshConnection` layout.
 
 **CSV export:** available for spreadsheet analysis.
+
+---
+
+## Tile Seam Borders
+
+When multiple tiles are loaded together, MeshViewer3D renders **thick dark-green lines** at the boundaries between tiles. This makes the inter-tile topology immediately readable — you can see exactly where one tile ends and another begins, which is critical for diagnosing pathfinding issues at tile edges.
+
+### How it works
+
+- After tiles are merged for rendering, each tile's polygon edges that lie on the tile's XZ bounding plane are detected.
+- Both endpoints must be within an adaptive epsilon of the same boundary plane (X-min, X-max, Z-min, or Z-max) to qualify as a seam edge.
+- Seam edges are collected into a single GPU buffer and rendered as `GL_LINES` with `LineWidth = 6.0` in dark green.
+- If only one tile is loaded, no seam buffer is built.
+
+### Technical details
+
+- **Implementation**: `NavMeshRenderer.LoadTileSeams(IEnumerable<NavMeshData>)` — called from `MainForm.LoadTileFiles()` with the pre-merge tile list.
+- **Color**: `(R=0, G=0.25, B=0)` — dark green matching the HB Tripper.Renderer appearance.
+- **Epsilon**: `max(0.5, tileSize * 0.015)` per axis, adapts to tile dimensions.
+- **Render order**: drawn immediately after wireframe, before off-mesh connections.
 
 ---
 
@@ -547,20 +571,25 @@ The right side panel has tabs:
 - Alpha and fog sliders
 
 ### Minimap
-- 64×64 tile grid showing which tiles are loaded
+- 64×64 tile grid showing which tiles are loaded (green cells)
+- Current camera position shown as a **red dot**, updated every frame
+- Tile coordinates displayed as `<X, Y>` below the minimap
 
 ### Console (bottom)
 - Color-coded log: green (success), red (error), orange (warning), white (info)
 
 ### HUD Overlay (top-left)
 ```
-Pos: {X, Y, Z}              Camera position (WoW coords)
-Tile: (31, 25)              Current tile coordinates
-Polys: 2,456 | Verts: 4,912 Mesh statistics
-Blackspots: 3 | Volumes: 0  Element counts
-FPS: 60 (16.6 ms)           Frame timing
-[CLICK MODE - Place Blackspot]  Active mode indicator
-[RAYTRACE] Hit: {X, Y, Z} | Poly #42 | Ground (0)   Raytrace cursor info
+Eastern Kingdoms (ID 0)     Map name + ID
+Target: {X, Y, Z}           Camera target/look-at point (WoW coords)
+Eye: {X, Y, Z}              Camera position (WoW coords)
+Tile: (31, 25)               Live tile under camera (updated each frame)
+Polys: 2,456 | Verts: 4,912  Mesh statistics
+Blackspots: 3 | Volumes: 0   Element counts
+FPS: 60 (16.6 ms)            Frame timing
+Camera: Orbit                Camera mode
+[CLICK MODE - Place Blackspot]   Active mode indicator
+[RAYTRACE] {X, Y, Z} | Tile: {31,25} | Poly #42 | Ground (1)   Raytrace info
 ```
 
 ---
@@ -738,7 +767,8 @@ Comparison with Honorbuddy's Tripper.Renderer:
 | NavMesh visualization | Yes | Yes | Done |
 | Area type coloring | Yes | Yes | Done |
 | Wireframe overlay | Yes | Yes | Done |
-| OffMesh display (from tiles) | Yes | Yes | Done |
+| OffMesh display (from tiles) | Yes | Yes | Done — parabolic arc + arrowhead + start circle |
+| Tile seam borders | Yes | Yes | Done — thick dark-green edge lines at tile boundaries |
 | Load Folder (multi-tile) | Yes | Yes | Done |
 | Blackspot editor | Yes | Yes | Done |
 | — Click to place | Yes | Yes | Done |
@@ -769,7 +799,8 @@ Comparison with Honorbuddy's Tripper.Renderer:
 | — Funnel Algorithm (smooth paths) | No | Yes | Done |
 | — Cross-tile navigation | No | Yes | Done |
 | — Off-mesh connections in pathfinding | No | Yes | Done |
-| Raytrace mode | Yes | Yes | Done |
+| Raytrace mode | Yes | Yes | Done — precision reticle (ring + arms + stem), G7 coords |
+| Live tile tracking (overlay + minimap) | Yes | Yes | Done — camera tile updates every frame |
 | NavMesh analysis (components, degenerate) | No | Yes | Done |
 | Export paths (JSON, CSV, HB XML) | No | Yes | Done |
 | Undo/Redo | Yes | Yes | Done |
