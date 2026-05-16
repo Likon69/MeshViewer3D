@@ -99,6 +99,10 @@ namespace MeshViewer3D.Rendering
         private int _testNavVao, _testNavVbo;
         private int _testNavVertexCount;
 
+        // Tile seam lines (thick dark-green borders between loaded tiles)
+        private int _tileSeamVao, _tileSeamVbo;
+        private int _tileSeamVertexCount;
+
         private bool _disposed;
 
         /// <summary>
@@ -237,6 +241,84 @@ namespace MeshViewer3D.Rendering
 
             // Créer OffMesh
             CreateOffMeshLines(mesh);
+
+            GL.BindVertexArray(0);
+        }
+
+        /// <summary>
+        /// Builds tile seam line buffers from the individual tiles before merging.
+        /// Finds polygon edges lying on each tile's XZ boundary and renders them as thick dark-green lines.
+        /// Call with an empty sequence to clear (e.g. when only one tile is loaded).
+        /// </summary>
+        public void LoadTileSeams(IEnumerable<NavMeshData> tiles)
+        {
+            // Release old buffers
+            if (_tileSeamVao != 0) { GL.DeleteVertexArray(_tileSeamVao); _tileSeamVao = 0; }
+            if (_tileSeamVbo != 0) { GL.DeleteBuffer(_tileSeamVbo); _tileSeamVbo = 0; }
+            _tileSeamVertexCount = 0;
+
+            var tileList = tiles as IList<NavMeshData> ?? new System.Collections.Generic.List<NavMeshData>(tiles);
+            if (tileList.Count < 2) return; // No seams between fewer than 2 tiles
+
+            var vertexData = new System.Collections.Generic.List<float>();
+            const float R = 0f, G = 0.25f, B = 0f; // dark green
+
+            foreach (var tile in tileList)
+            {
+                var bmin = tile.Header.BMin;
+                var bmax = tile.Header.BMax;
+                float sizeX = bmax.X - bmin.X;
+                float sizeZ = bmax.Z - bmin.Z;
+                float epsX = Math.Max(0.5f, sizeX * 0.015f);
+                float epsZ = Math.Max(0.5f, sizeZ * 0.015f);
+
+                foreach (var poly in tile.Polys)
+                {
+                    if (poly.VertCount < 3) continue;
+
+                    for (int i = 0; i < poly.VertCount; i++)
+                    {
+                        int ia = poly.Verts[i];
+                        int ib = poly.Verts[(i + 1) % poly.VertCount];
+                        if (ia >= tile.Vertices.Length || ib >= tile.Vertices.Length) continue;
+
+                        var va = tile.Vertices[ia];
+                        var vb = tile.Vertices[ib];
+
+                        // Edge is a seam if both endpoints share the same tile boundary plane
+                        bool onBoundary =
+                            (Math.Abs(va.X - bmin.X) < epsX && Math.Abs(vb.X - bmin.X) < epsX) ||
+                            (Math.Abs(va.X - bmax.X) < epsX && Math.Abs(vb.X - bmax.X) < epsX) ||
+                            (Math.Abs(va.Z - bmin.Z) < epsZ && Math.Abs(vb.Z - bmin.Z) < epsZ) ||
+                            (Math.Abs(va.Z - bmax.Z) < epsZ && Math.Abs(vb.Z - bmax.Z) < epsZ);
+
+                        if (!onBoundary) continue;
+
+                        vertexData.Add(va.X); vertexData.Add(va.Y); vertexData.Add(va.Z);
+                        vertexData.Add(R);    vertexData.Add(G);    vertexData.Add(B);
+                        vertexData.Add(vb.X); vertexData.Add(vb.Y); vertexData.Add(vb.Z);
+                        vertexData.Add(R);    vertexData.Add(G);    vertexData.Add(B);
+                    }
+                }
+            }
+
+            if (vertexData.Count == 0) return;
+
+            _tileSeamVao = GL.GenVertexArray();
+            _tileSeamVbo = GL.GenBuffer();
+
+            GL.BindVertexArray(_tileSeamVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _tileSeamVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, vertexData.Count * sizeof(float),
+                          vertexData.ToArray(), BufferUsageHint.StaticDraw);
+
+            int stride = 6 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
+
+            _tileSeamVertexCount = vertexData.Count / 6;
 
             GL.BindVertexArray(0);
         }
@@ -546,33 +628,17 @@ namespace MeshViewer3D.Rendering
 
             foreach (var conn in _editableElements.CustomOffMeshConnections)
             {
-                // Couleur selon direction (comme HB)
-                // Cyan = bidirectionnel, Orange = unidirectionnel
                 float r, g, b;
                 if (conn.IsBidirectional)
                 {
-                    r = 0f; g = 1f; b = 1f; // Cyan
+                    r = 0f; g = 1f; b = 1f; // Cyan = bidirectionnel
                 }
                 else
                 {
-                    r = 1f; g = 0.6f; b = 0f; // Orange
+                    r = 1f; g = 0.6f; b = 0f; // Orange = unidirectionnel
                 }
 
-                // Start point (position + couleur)
-                lineData.Add(conn.Start.X);
-                lineData.Add(conn.Start.Y);
-                lineData.Add(conn.Start.Z);
-                lineData.Add(r);
-                lineData.Add(g);
-                lineData.Add(b);
-
-                // End point (position + couleur)
-                lineData.Add(conn.End.X);
-                lineData.Add(conn.End.Y);
-                lineData.Add(conn.End.Z);
-                lineData.Add(r);
-                lineData.Add(g);
-                lineData.Add(b);
+                AddOffMeshArcVertices(lineData, conn.Start, conn.End, r, g, b);
             }
 
             if (lineData.Count == 0) return;
@@ -690,22 +756,70 @@ namespace MeshViewer3D.Rendering
             _wireVertexCount = edgeIndices.Count;
         }
 
+        /// <summary>
+        /// Adds parabolic arc off-mesh geometry (circle at start + arc + arrowhead at end)
+        /// into a colored vertex list (6 floats per vertex: XYZ + RGB).
+        /// </summary>
+        private static void AddOffMeshArcVertices(List<float> verts, Vector3 start, Vector3 end, float r, float g, float b)
+        {
+            const int   arcSegs      = 16;
+            const int   circleSegs   = 8;
+            const float circleRadius = 0.45f;
+            const float arrowLength  = 1.4f;
+
+            // 1. Small circle ring at start endpoint (XZ plane)
+            for (int i = 0; i < circleSegs; i++)
+            {
+                float a0 = (float)i       / circleSegs * MathF.Tau;
+                float a1 = (float)(i + 1) / circleSegs * MathF.Tau;
+                verts.Add(start.X + MathF.Cos(a0) * circleRadius); verts.Add(start.Y); verts.Add(start.Z + MathF.Sin(a0) * circleRadius); verts.Add(r); verts.Add(g); verts.Add(b);
+                verts.Add(start.X + MathF.Cos(a1) * circleRadius); verts.Add(start.Y); verts.Add(start.Z + MathF.Sin(a1) * circleRadius); verts.Add(r); verts.Add(g); verts.Add(b);
+            }
+
+            // 2. Parabolic arc — apex proportional to horizontal distance
+            float hDist = MathF.Sqrt((end.X - start.X) * (end.X - start.X) + (end.Z - start.Z) * (end.Z - start.Z));
+            float apexH = MathF.Max(1.5f, hDist * 0.3f);
+
+            var arc = new Vector3[arcSegs + 1];
+            for (int i = 0; i <= arcSegs; i++)
+            {
+                float t = (float)i / arcSegs;
+                arc[i] = new Vector3(
+                    start.X + (end.X - start.X) * t,
+                    start.Y + (end.Y - start.Y) * t + apexH * MathF.Sin(t * MathF.PI),
+                    start.Z + (end.Z - start.Z) * t
+                );
+            }
+
+            for (int i = 0; i < arcSegs; i++)
+            {
+                verts.Add(arc[i].X);   verts.Add(arc[i].Y);   verts.Add(arc[i].Z);   verts.Add(r); verts.Add(g); verts.Add(b);
+                verts.Add(arc[i+1].X); verts.Add(arc[i+1].Y); verts.Add(arc[i+1].Z); verts.Add(r); verts.Add(g); verts.Add(b);
+            }
+
+            // 3. Arrowhead at end point
+            var approach = Vector3.Normalize(arc[arcSegs] - arc[arcSegs - 1]);
+            var right    = Vector3.Cross(approach, Vector3.UnitY);
+            if (right.LengthSquared < 0.001f) right = Vector3.UnitX;
+            right = Vector3.Normalize(right);
+
+            var wing1 = end + (-approach + right * 0.55f) * arrowLength;
+            var wing2 = end + (-approach - right * 0.55f) * arrowLength;
+            verts.Add(end.X); verts.Add(end.Y); verts.Add(end.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+            verts.Add(wing1.X); verts.Add(wing1.Y); verts.Add(wing1.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+            verts.Add(end.X); verts.Add(end.Y); verts.Add(end.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+            verts.Add(wing2.X); verts.Add(wing2.Y); verts.Add(wing2.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+        }
+
         private void CreateOffMeshLines(NavMeshData mesh)
         {
             var lineData = new List<float>();
 
-            foreach (var con in mesh.OffMeshConnections)
-            {
-                // Start point
-                lineData.Add(con.Start.X);
-                lineData.Add(con.Start.Y);
-                lineData.Add(con.Start.Z);
+            // Cyan — couleur par défaut des off-mesh tile (bidirectionnel)
+            const float r = 0f, g = 1f, b = 1f;
 
-                // End point
-                lineData.Add(con.End.X);
-                lineData.Add(con.End.Y);
-                lineData.Add(con.End.Z);
-            }
+            foreach (var con in mesh.OffMeshConnections)
+                AddOffMeshArcVertices(lineData, con.Start, con.End, r, g, b);
 
             if (lineData.Count == 0) return;
 
@@ -717,10 +831,14 @@ namespace MeshViewer3D.Rendering
             GL.BufferData(BufferTarget.ArrayBuffer, lineData.Count * sizeof(float),
                           lineData.ToArray(), BufferUsageHint.StaticDraw);
 
-            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
+            int stride = 6 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
             GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
 
-            _offmeshVertexCount = lineData.Count / 3;
+            _offmeshVertexCount = lineData.Count / 6;
+            GL.BindVertexArray(0);
         }
 
         /// <summary>
@@ -794,16 +912,27 @@ namespace MeshViewer3D.Rendering
                 GL.DrawElements(PrimitiveType.Lines, _wireVertexCount, DrawElementsType.UnsignedInt, 0);
             }
 
-            // Render OffMesh from tile
+            // Render tile seam borders (thick dark-green lines at tile boundaries)
+            if (_tileSeamVertexCount > 0 && _coloredLineShader != null)
+            {
+                _coloredLineShader.Use();
+                _coloredLineShader.SetMatrix4("uModel", model);
+                _coloredLineShader.SetMatrix4("uView", view);
+                _coloredLineShader.SetMatrix4("uProjection", projection);
+
+                GL.LineWidth(6.0f);
+                GL.BindVertexArray(_tileSeamVao);
+                GL.DrawArrays(PrimitiveType.Lines, 0, _tileSeamVertexCount);
+                GL.LineWidth(1.0f);
+            }
+
+            // Render OffMesh from tile (arcs paraboliques + cercles + flèches)
             if (_showOffMesh && _offmeshVertexCount > 0)
             {
-                _lineShader.Use();
-                _lineShader.SetMatrix4("uModel", model);
-                _lineShader.SetMatrix4("uView", view);
-                _lineShader.SetMatrix4("uProjection", projection);
-
-                var offmeshColor = ColorScheme.ColorToVector4(ColorScheme.OffMeshBidirectional);
-                _lineShader.SetVector4("uColor", offmeshColor);
+                _coloredLineShader.Use();
+                _coloredLineShader.SetMatrix4("uModel", model);
+                _coloredLineShader.SetMatrix4("uView", view);
+                _coloredLineShader.SetMatrix4("uProjection", projection);
 
                 GL.LineWidth(2.0f);
                 GL.BindVertexArray(_offmeshVao);
@@ -919,7 +1048,7 @@ namespace MeshViewer3D.Rendering
                 _coloredLineShader.SetMatrix4("uView", view);
                 _coloredLineShader.SetMatrix4("uProjection", projection);
 
-                GL.LineWidth(4.0f);
+                GL.LineWidth(2.0f);
                 GL.BindVertexArray(_testNavVao);
                 GL.DrawArrays(PrimitiveType.Lines, 0, _testNavVertexCount);
                 GL.LineWidth(1.0f);
@@ -1037,27 +1166,29 @@ namespace MeshViewer3D.Rendering
             _testNavVbo = 0;
             _testNavVertexCount = 0;
 
-            if (waypoints == null || waypoints.Count < 2) return;
-
             var vertexData = new List<float>();
 
-            // Path line segments (yellow-orange)
-            for (int i = 0; i < waypoints.Count - 1; i++)
+            if (waypoints != null && waypoints.Count >= 2)
             {
-                var a = waypoints[i];
-                var b = waypoints[i + 1];
-                // Slight Y offset to draw above navmesh
-                vertexData.AddRange(new[] { a.X, a.Y + 0.3f, a.Z, 1.0f, 0.8f, 0.0f }); // yellow-orange
-                vertexData.AddRange(new[] { b.X, b.Y + 0.3f, b.Z, 1.0f, 0.8f, 0.0f });
+                for (int i = 0; i < waypoints.Count - 1; i++)
+                {
+                    AddDashedLineVertices(
+                        vertexData,
+                        waypoints[i],
+                        waypoints[i + 1],
+                        1.4f,
+                        1.0f,
+                        18f / 255f,
+                        18f / 255f,
+                        18f / 255f);
+                }
             }
 
-            // Start marker (green cross)
             if (startPos.HasValue)
-                AddCrossVertices(vertexData, startPos.Value, 4.0f, 0.0f, 1.0f, 0.0f);
+                AddAgentMarkerVertices(vertexData, startPos.Value, 2.0f, 3.5f, 128f / 255f, 25f / 255f, 0f);
 
-            // End marker (red cross)
             if (endPos.HasValue)
-                AddCrossVertices(vertexData, endPos.Value, 4.0f, 1.0f, 0.0f, 0.0f);
+                AddAgentMarkerVertices(vertexData, endPos.Value, 2.0f, 3.5f, 51f / 255f, 102f / 255f, 0f);
 
             if (vertexData.Count == 0) return;
 
@@ -1081,16 +1212,55 @@ namespace MeshViewer3D.Rendering
             GL.BindVertexArray(0);
         }
 
-        private static void AddCrossVertices(List<float> data, Vector3 pos, float size, float r, float g, float b)
+        private static void AddDashedLineVertices(List<float> data, Vector3 start, Vector3 end, float dashLength, float gapLength, float r, float g, float b)
         {
-            float y = pos.Y + 0.5f;
-            data.AddRange(new[] { pos.X - size, y, pos.Z, r, g, b });
-            data.AddRange(new[] { pos.X + size, y, pos.Z, r, g, b });
-            data.AddRange(new[] { pos.X, y, pos.Z - size, r, g, b });
-            data.AddRange(new[] { pos.X, y, pos.Z + size, r, g, b });
-            // Vertical
-            data.AddRange(new[] { pos.X, pos.Y - size, pos.Z, r, g, b });
-            data.AddRange(new[] { pos.X, pos.Y + size, pos.Z, r, g, b });
+            var delta = end - start;
+            float length = delta.Length;
+            if (length <= float.Epsilon)
+                return;
+
+            var direction = delta / length;
+            float distance = 0f;
+
+            while (distance < length)
+            {
+                float dashEnd = MathF.Min(distance + dashLength, length);
+                var dashStartPos = start + direction * distance;
+                var dashEndPos = start + direction * dashEnd;
+
+                data.AddRange(new[] { dashStartPos.X, dashStartPos.Y + 0.35f, dashStartPos.Z, r, g, b });
+                data.AddRange(new[] { dashEndPos.X, dashEndPos.Y + 0.35f, dashEndPos.Z, r, g, b });
+
+                distance += dashLength + gapLength;
+            }
+        }
+
+        private static void AddAgentMarkerVertices(List<float> data, Vector3 pos, float radius, float height, float r, float g, float b)
+        {
+            const int segments = 16;
+            float ringY = pos.Y + 0.15f;
+            float topY = pos.Y + height;
+
+            for (int i = 0; i < segments; i++)
+            {
+                float angle0 = i * MathF.Tau / segments;
+                float angle1 = (i + 1) * MathF.Tau / segments;
+
+                data.AddRange(new[]
+                {
+                    pos.X + MathF.Cos(angle0) * radius, ringY, pos.Z + MathF.Sin(angle0) * radius, r, g, b,
+                    pos.X + MathF.Cos(angle1) * radius, ringY, pos.Z + MathF.Sin(angle1) * radius, r, g, b
+                });
+            }
+
+            data.AddRange(new[] { pos.X, ringY, pos.Z, r, g, b });
+            data.AddRange(new[] { pos.X, topY, pos.Z, r, g, b });
+
+            float arm = radius * 0.9f;
+            data.AddRange(new[] { pos.X - arm, topY, pos.Z, r, g, b });
+            data.AddRange(new[] { pos.X + arm, topY, pos.Z, r, g, b });
+            data.AddRange(new[] { pos.X, topY, pos.Z - arm, r, g, b });
+            data.AddRange(new[] { pos.X, topY, pos.Z + arm, r, g, b });
         }
 
         public void SetRaytraceMarker(Vector3? position)
@@ -1100,11 +1270,11 @@ namespace MeshViewer3D.Rendering
         }
 
         /// <summary>
-        /// Creates a 3D cross (3 axis lines) at the raytrace hit position.
+        /// Creates a target-reticle marker at the raytrace hit position:
+        /// a flat circle ring on the surface, 4 outward arms with a center gap, and a vertical stem.
         /// </summary>
         private void UpdateRaytraceMarkerBuffers()
         {
-            // Delete old buffers
             if (_raytraceVao != 0) GL.DeleteVertexArray(_raytraceVao);
             if (_raytraceVbo != 0) GL.DeleteBuffer(_raytraceVbo);
             _raytraceVao = 0;
@@ -1114,27 +1284,48 @@ namespace MeshViewer3D.Rendering
             if (_raytraceMarkerPos == null) return;
 
             var pos = _raytraceMarkerPos.Value;
-            const float size = 3.0f; // Cross arm length
 
-            // 3 axis lines (6 vertices) + vertical line to show height clearly
-            // Each vertex: position (3 floats) + color (3 floats)
-            var vertexData = new float[]
+            // Geometry constants
+            const int   ringSegments = 32;
+            const float ringRadius   = 1.8f;   // Circle ring radius
+            const float armStart     = 0.55f;  // Gap between center and arm start
+            const float armEnd       = 4.2f;   // Arm total reach from center
+            const float stemHeight   = 5.0f;   // Vertical stem height
+
+            // Color constants
+            const float wr = 1.00f, wg = 1.00f, wb = 1.00f; // White  — ring + stem
+            const float ar = 1.00f, ag = 0.35f, ab = 0.05f; // Orange — cross arms
+
+            var verts = new List<float>(6 * (ringSegments * 2 + 10));
+
+            // 1. Flat circle ring on the navmesh surface (line-loop as pairs)
+            for (int i = 0; i < ringSegments; i++)
             {
-                // X axis (red)
-                pos.X - size, pos.Y, pos.Z,    1.0f, 0.2f, 0.2f,
-                pos.X + size, pos.Y, pos.Z,    1.0f, 0.2f, 0.2f,
-                // Y axis (green) - vertical
-                pos.X, pos.Y - size, pos.Z,    0.2f, 1.0f, 0.2f,
-                pos.X, pos.Y + size, pos.Z,    0.2f, 1.0f, 0.2f,
-                // Z axis (blue)
-                pos.X, pos.Y, pos.Z - size,    0.4f, 0.4f, 1.0f,
-                pos.X, pos.Y, pos.Z + size,    0.4f, 0.4f, 1.0f,
-                // Yellow outer cross for visibility
-                pos.X - size * 2, pos.Y + 0.5f, pos.Z,    1.0f, 1.0f, 0.0f,
-                pos.X + size * 2, pos.Y + 0.5f, pos.Z,    1.0f, 1.0f, 0.0f,
-                pos.X, pos.Y + 0.5f, pos.Z - size * 2,    1.0f, 1.0f, 0.0f,
-                pos.X, pos.Y + 0.5f, pos.Z + size * 2,    1.0f, 1.0f, 0.0f,
-            };
+                float a0 = (float)i       / ringSegments * MathF.Tau;
+                float a1 = (float)(i + 1) / ringSegments * MathF.Tau;
+                verts.AddRange(new[] { pos.X + MathF.Cos(a0) * ringRadius, pos.Y, pos.Z + MathF.Sin(a0) * ringRadius, wr, wg, wb });
+                verts.AddRange(new[] { pos.X + MathF.Cos(a1) * ringRadius, pos.Y, pos.Z + MathF.Sin(a1) * ringRadius, wr, wg, wb });
+            }
+
+            // 2. 4 cross arms (start at gap, end beyond ring) on the XZ plane
+            // +X
+            verts.AddRange(new[] { pos.X + armStart, pos.Y, pos.Z,          ar, ag, ab });
+            verts.AddRange(new[] { pos.X + armEnd,   pos.Y, pos.Z,          ar, ag, ab });
+            // -X
+            verts.AddRange(new[] { pos.X - armStart, pos.Y, pos.Z,          ar, ag, ab });
+            verts.AddRange(new[] { pos.X - armEnd,   pos.Y, pos.Z,          ar, ag, ab });
+            // +Z
+            verts.AddRange(new[] { pos.X, pos.Y, pos.Z + armStart,          ar, ag, ab });
+            verts.AddRange(new[] { pos.X, pos.Y, pos.Z + armEnd,            ar, ag, ab });
+            // -Z
+            verts.AddRange(new[] { pos.X, pos.Y, pos.Z - armStart,          ar, ag, ab });
+            verts.AddRange(new[] { pos.X, pos.Y, pos.Z - armEnd,            ar, ag, ab });
+
+            // 3. Vertical stem showing height reference
+            verts.AddRange(new[] { pos.X, pos.Y,             pos.Z,         wr, wg, wb });
+            verts.AddRange(new[] { pos.X, pos.Y + stemHeight, pos.Z,        wr, wg, wb });
+
+            float[] vertexData = verts.ToArray();
 
             _raytraceVao = GL.GenVertexArray();
             GL.BindVertexArray(_raytraceVao);
@@ -1145,14 +1336,12 @@ namespace MeshViewer3D.Rendering
                           vertexData, BufferUsageHint.DynamicDraw);
 
             int stride = 6 * sizeof(float);
-            // Position
             GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
             GL.EnableVertexAttribArray(0);
-            // Color
             GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
             GL.EnableVertexAttribArray(1);
 
-            _raytraceVertexCount = vertexData.Length / 6; // 10 vertices = 5 line segments
+            _raytraceVertexCount = vertexData.Length / 6;
             GL.BindVertexArray(0);
         }
 
@@ -1610,6 +1799,10 @@ namespace MeshViewer3D.Rendering
             // Delete test navigation path buffers
             if (_testNavVao != 0) GL.DeleteVertexArray(_testNavVao);
             if (_testNavVbo != 0) GL.DeleteBuffer(_testNavVbo);
+
+            // Delete tile seam buffers
+            if (_tileSeamVao != 0) GL.DeleteVertexArray(_tileSeamVao);
+            if (_tileSeamVbo != 0) GL.DeleteBuffer(_tileSeamVbo);
 
             _meshShader?.Dispose();
             _lineShader?.Dispose();

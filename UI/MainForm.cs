@@ -31,6 +31,8 @@ namespace MeshViewer3D.UI
         private MinimapControl? _minimap;
         private ConsoleControl? _console;
         private Label? _overlayLabel;
+        private Label? _testNavStartTag;
+        private Label? _testNavEndTag;
         private System.Windows.Forms.Timer? _renderTimer;
         private TabControl? _editorTabs;
         private SplitContainer? _splitMain;
@@ -83,6 +85,10 @@ namespace MeshViewer3D.UI
         private Vector3? _testNavEndPoint = null;
         private int _testNavEndPolyIndex = -1;
         private List<Vector3>? _testNavPath = null;
+        private bool _testNavHasAttemptedPath = false;
+        private float _testNavPathDistanceYards = 0f;
+        private float _testNavDirectDistanceYards = 0f;
+        private long _testNavLastSolveMs = 0;
 
         public MainForm()
         {
@@ -676,6 +682,32 @@ namespace MeshViewer3D.UI
             _splitViewport.Panel1.Controls.Add(_overlayLabel);
             _overlayLabel.BringToFront();
 
+            _testNavStartTag = new Label
+            {
+                AutoSize = true,
+                BackColor = Color.FromArgb(190, 25, 20, 20),
+                ForeColor = Color.FromArgb(255, 220, 220),
+                Font = new Font("Consolas", 9, FontStyle.Bold),
+                Padding = new Padding(4, 1, 4, 1),
+                Text = "Start",
+                Visible = false
+            };
+            _splitViewport.Panel1.Controls.Add(_testNavStartTag);
+            _testNavStartTag.BringToFront();
+
+            _testNavEndTag = new Label
+            {
+                AutoSize = true,
+                BackColor = Color.FromArgb(190, 20, 45, 20),
+                ForeColor = Color.FromArgb(220, 255, 220),
+                Font = new Font("Consolas", 9, FontStyle.Bold),
+                Padding = new Padding(4, 1, 4, 1),
+                Text = "End",
+                Visible = false
+            };
+            _splitViewport.Panel1.Controls.Add(_testNavEndTag);
+            _testNavEndTag.BringToFront();
+
             _console.Log("MeshViewer3D initialized. Quality: Honorbuddy/Apoc level.");
 
             // Timer de rendu (60 FPS)
@@ -1146,6 +1178,7 @@ namespace MeshViewer3D.UI
 
             _currentMesh = NavMeshData.Merge(meshesToMerge);
             _renderer?.LoadMesh(_currentMesh);
+            _renderer?.LoadTileSeams(meshesToMerge);
             _cameraController?.FrameScene();
             _minimap?.SetCurrentTile(_currentMesh.TileX, _currentMesh.TileY);
 
@@ -2030,6 +2063,11 @@ namespace MeshViewer3D.UI
             {
                 var wowTarget = CoordinateSystem.DetourToWow(_camera.Target);
                 var wowEye = CoordinateSystem.DetourToWow(_camera.GetEyePosition());
+
+                // Minimap — point rouge suit la caméra en temps réel
+                var (camTileX, camTileY) = CoordinateSystem.WorldToTile(wowEye);
+                _minimap?.SetCurrentTile(camTileX, camTileY);
+
                 string modeText = _blackspotClickMode ? "\n[CLICK MODE - Place Blackspot]"
                     : _jumpLinkClickMode ? $"\n[CLICK MODE - Place Jump Link {(_jumpLinksPanel?.PendingStartPoint == null ? "Start" : "End")}]"
                     : _volumeClickMode ? $"\n[VOLUME MODE - {_volumesPanel?.InProgressVertices.Count ?? 0} vertices (Enter to finalize)]"
@@ -2038,9 +2076,10 @@ namespace MeshViewer3D.UI
                 if (_raytraceMode && _raytraceHitPoint.HasValue && _raytraceHitPolyIndex >= 0)
                 {
                     var wowHit = CoordinateSystem.DetourToWow(_raytraceHitPoint.Value);
+                    var (tileX, tileY) = CoordinateSystem.WorldToTile(wowHit);
                     byte area = _currentMesh.Polys[_raytraceHitPolyIndex].Area;
                     string areaName = Data.AreaTypeInfo.GetName(area);
-                    modeText += $"\n[RAYTRACE] Hit: {{{wowHit.X:F1}, {wowHit.Y:F1}, {wowHit.Z:F1}}} | Poly #{_raytraceHitPolyIndex} | {areaName} ({area})";
+                    modeText += $"\n[RAYTRACE] {{{wowHit.X:G7}, {wowHit.Y:G7}, {wowHit.Z:G7}}} | Tile: {{{tileX}, {tileY}}} | Poly #{_raytraceHitPolyIndex} | {areaName} ({area})";
                 }
                 else if (_raytraceMode)
                 {
@@ -2049,29 +2088,116 @@ namespace MeshViewer3D.UI
 
                 if (_testNavMode)
                 {
-                    if (_testNavStartPoint.HasValue && _testNavEndPoint == null)
+                    modeText += "\n[TEST NAV] Shift+Click = Start | Click = End";
+
+                    if (_testNavStartPoint.HasValue && _testNavEndPoint.HasValue && _testNavHasAttemptedPath)
+                    {
+                        float pathMeters = _testNavPathDistanceYards * 0.9144f;
+                        float directMeters = _testNavDirectDistanceYards * 0.9144f;
+
+                        if (_testNavPath != null)
+                        {
+                            float detourFactor = _testNavDirectDistanceYards > 0.001f
+                                ? _testNavPathDistanceYards / _testNavDirectDistanceYards
+                                : 0f;
+                            modeText += $"\n[TEST NAV] Path: {_testNavPathDistanceYards:F1} yd / {pathMeters:F1} m | {_testNavPath.Count} pts | straight {_testNavDirectDistanceYards:F1} yd / {directMeters:F1} m | x{detourFactor:F2} | {_testNavLastSolveMs} ms";
+                        }
+                        else
+                        {
+                            modeText += $"\n[TEST NAV] No path | straight {_testNavDirectDistanceYards:F1} yd / {directMeters:F1} m | {_testNavLastSolveMs} ms";
+                        }
+                    }
+                    else if (_testNavStartPoint.HasValue && _testNavEndPoint == null)
                     {
                         var ws = CoordinateSystem.DetourToWow(_testNavStartPoint.Value);
                         modeText += $"\n[TEST NAV] Start: {{{ws.X:F1}, {ws.Y:F1}, {ws.Z:F1}}} — Click end point";
                     }
-                    else if (_testNavPath != null)
+                    else if (!_testNavStartPoint.HasValue && _testNavEndPoint.HasValue)
                     {
-                        modeText += $"\n[TEST NAV] Path: {_testNavPath.Count} waypoints";
+                        var we = CoordinateSystem.DetourToWow(_testNavEndPoint.Value);
+                        modeText += $"\n[TEST NAV] End: {{{we.X:F1}, {we.Y:F1}, {we.Z:F1}}} — Shift+Click start point";
                     }
                     else if (_testNavStartPoint == null)
                     {
-                        modeText += "\n[TEST NAV] Click start point";
+                        modeText += "\n[TEST NAV] Shift+Click start point";
                     }
                 }
 
-                _overlayLabel.Text = $"Target: {{{wowTarget.X:F1}, {wowTarget.Y:F1}, {wowTarget.Z:F1}}}\n" +
+                string? mapName = MapDatabase.GetName(_currentMesh.MapId);
+                string mapLabel = mapName != null ? $"{mapName} (ID {_currentMesh.MapId})" : $"Map {_currentMesh.MapId}";
+
+                _overlayLabel.Text = $"{mapLabel}\n" +
+                                     $"Target: {{{wowTarget.X:F1}, {wowTarget.Y:F1}, {wowTarget.Z:F1}}}\n" +
                                      $"Eye: {{{wowEye.X:F1}, {wowEye.Y:F1}, {wowEye.Z:F1}}}\n" +
-                                     $"Tile: ({_currentMesh.TileX}, {_currentMesh.TileY})\n" +
+                                     $"Tile: ({camTileX}, {camTileY})\n" +
                                      $"Polys: {_currentMesh.Polys.Length} | Verts: {_currentMesh.Vertices.Length}\n" +
                                      $"Blackspots: {_editableElements.Blackspots.Count} | Volumes: {_editableElements.ConvexVolumes.Count}\n" +
                                      $"FPS: {_fps:F0} ({1000f/_fps:F1} ms)\n" +
                                      $"Camera: {(_camera.FreeCameraMode ? "Free" : "Orbit")}" + modeText;
+
+                UpdateTestNavScreenTags();
             }
+        }
+
+        private void UpdateTestNavScreenTags()
+        {
+            if (_glControl == null)
+                return;
+
+            UpdateScreenTag(_testNavStartTag, _testNavMode ? _testNavStartPoint : null, 4, -18);
+            UpdateScreenTag(_testNavEndTag, _testNavMode ? _testNavEndPoint : null, 4, -18);
+        }
+
+        private void UpdateScreenTag(Label? tag, Vector3? worldPos, int offsetX, int offsetY)
+        {
+            if (tag == null || _glControl == null)
+                return;
+
+            if (!worldPos.HasValue || !TryProjectWorldToScreen(worldPos.Value, out var screenPos))
+            {
+                tag.Visible = false;
+                return;
+            }
+
+            int x = Math.Clamp(screenPos.X + offsetX, 0, Math.Max(0, _glControl.Width - tag.Width));
+            int y = Math.Clamp(screenPos.Y + offsetY, 0, Math.Max(0, _glControl.Height - tag.Height));
+            tag.Location = new Point(x, y);
+            tag.Visible = true;
+        }
+
+        private bool TryProjectWorldToScreen(Vector3 worldPos, out Point screenPos)
+        {
+            screenPos = Point.Empty;
+            if (_glControl == null || _glControl.Width <= 0 || _glControl.Height <= 0)
+                return false;
+
+            var view = _camera.GetViewMatrix();
+            var projection = _camera.GetProjectionMatrix((float)_glControl.Width / _glControl.Height);
+
+            var world = new Vector4(worldPos.X, worldPos.Y + 3.0f, worldPos.Z, 1.0f);
+            var clip = MultiplyRowVectorByMatrix(world, view);
+            clip = MultiplyRowVectorByMatrix(clip, projection);
+
+            if (clip.W <= 0.0001f)
+                return false;
+
+            var ndc = new Vector3(clip.X / clip.W, clip.Y / clip.W, clip.Z / clip.W);
+            if (ndc.X < -1.1f || ndc.X > 1.1f || ndc.Y < -1.1f || ndc.Y > 1.1f)
+                return false;
+
+            int sx = (int)MathF.Round((ndc.X * 0.5f + 0.5f) * _glControl.Width);
+            int sy = (int)MathF.Round((1.0f - (ndc.Y * 0.5f + 0.5f)) * _glControl.Height);
+            screenPos = new Point(sx, sy);
+            return true;
+        }
+
+        private static Vector4 MultiplyRowVectorByMatrix(Vector4 v, Matrix4 m)
+        {
+            return new Vector4(
+                v.X * m.M11 + v.Y * m.M21 + v.Z * m.M31 + v.W * m.M41,
+                v.X * m.M12 + v.Y * m.M22 + v.Z * m.M32 + v.W * m.M42,
+                v.X * m.M13 + v.Y * m.M23 + v.Z * m.M33 + v.W * m.M43,
+                v.X * m.M14 + v.Y * m.M24 + v.Z * m.M34 + v.W * m.M44);
         }
         
         private void OnLoadBlackspots(object? sender, EventArgs e)
@@ -2417,17 +2543,10 @@ namespace MeshViewer3D.UI
             if (sender is ToolStripButton btn)
             {
                 _testNavMode = btn.Checked;
-                if (!_testNavMode)
-                {
-                    ClearTestNavState();
-                }
-                else
-                {
-                    ClearTestNavState();
-                }
+                ClearTestNavState();
                 if (_glControl != null)
                     _glControl.Cursor = _testNavMode ? Cursors.Cross : Cursors.Default;
-                _console?.Log($"Test Navigation mode: {(_testNavMode ? "ON — Click start point" : "OFF")}");
+                _console?.Log($"Test Navigation mode: {(_testNavMode ? "ON — Shift+Click = Start, Click = End" : "OFF")}");
             }
         }
 
@@ -2438,7 +2557,50 @@ namespace MeshViewer3D.UI
             _testNavEndPoint = null;
             _testNavEndPolyIndex = -1;
             _testNavPath = null;
+            _testNavHasAttemptedPath = false;
+            _testNavPathDistanceYards = 0f;
+            _testNavDirectDistanceYards = 0f;
+            _testNavLastSolveMs = 0;
             _renderer?.SetTestNavPath(null, null, null);
+        }
+
+        private void UpdateTestNavVisualization()
+        {
+            _renderer?.SetTestNavPath(_testNavStartPoint, _testNavEndPoint, _testNavPath);
+        }
+
+        private void RecalculateTestNavigationPath()
+        {
+            _testNavPath = null;
+            _testNavHasAttemptedPath = false;
+            _testNavPathDistanceYards = 0f;
+            _testNavDirectDistanceYards = 0f;
+            _testNavLastSolveMs = 0;
+
+            if (_currentMesh == null || !_testNavStartPoint.HasValue || !_testNavEndPoint.HasValue)
+            {
+                UpdateTestNavVisualization();
+                return;
+            }
+
+            _testNavDirectDistanceYards = (_testNavEndPoint.Value - _testNavStartPoint.Value).Length;
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            _testNavPath = NavMeshPathfinder.FindPath(
+                _currentMesh,
+                _testNavStartPoint.Value,
+                _testNavStartPolyIndex,
+                _testNavEndPoint.Value,
+                _testNavEndPolyIndex);
+            sw.Stop();
+
+            _testNavHasAttemptedPath = true;
+            _testNavLastSolveMs = sw.ElapsedMilliseconds;
+
+            if (_testNavPath != null)
+                _testNavPathDistanceYards = ComputePathDistance(_testNavPath);
+
+            UpdateTestNavVisualization();
         }
 
         private void PlaceTestNavPoint(int screenX, int screenY)
@@ -2495,56 +2657,55 @@ namespace MeshViewer3D.UI
 
                 var wowHit = CoordinateSystem.DetourToWow(closestHit);
 
-                if (_testNavStartPoint == null)
+                bool setStart = ModifierKeys.HasFlag(Keys.Shift);
+
+                if (setStart)
                 {
-                    // First click: set start
                     _testNavStartPoint = closestHit;
                     _testNavStartPolyIndex = closestPolyIndex;
-                    _testNavEndPoint = null;
-                    _testNavEndPolyIndex = -1;
-                    _testNavPath = null;
-
-                    // Show start marker only
-                    _renderer.SetTestNavPath(closestHit, null, new List<Vector3> { closestHit, closestHit });
 
                     byte area = _currentMesh.Polys[closestPolyIndex].Area;
-                    _console?.LogSuccess($"Start: [{wowHit.X:F1}, {wowHit.Y:F1}, {wowHit.Z:F1}] Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)}) — Click end point");
+                    _console?.LogSuccess($"Start: [{wowHit.X:G7}, {wowHit.Y:G7}, {wowHit.Z:G7}] Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)})");
+
+                    RecalculateTestNavigationPath();
+
+                    if (!_testNavEndPoint.HasValue)
+                        _console?.Log("Test Nav: click to place or move End");
                 }
                 else
                 {
-                    // Second click: set end and compute path
                     _testNavEndPoint = closestHit;
                     _testNavEndPolyIndex = closestPolyIndex;
 
                     byte area = _currentMesh.Polys[closestPolyIndex].Area;
-                    _console?.Log($"End: [{wowHit.X:F1}, {wowHit.Y:F1}, {wowHit.Z:F1}] Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)})");
+                    _console?.Log($"End: [{wowHit.X:G7}, {wowHit.Y:G7}, {wowHit.Z:G7}] Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)})");
 
-                    // Run A* pathfinding
-                    var sw = System.Diagnostics.Stopwatch.StartNew();
-                    _testNavPath = NavMeshPathfinder.FindPath(
-                        _currentMesh, _testNavStartPoint.Value, _testNavStartPolyIndex,
-                        closestHit, closestPolyIndex);
-                    sw.Stop();
+                    RecalculateTestNavigationPath();
 
-                    if (_testNavPath != null)
+                    if (_testNavStartPoint.HasValue)
                     {
-                        // Compute path distance
-                        float totalDist = 0;
-                        for (int i = 0; i < _testNavPath.Count - 1; i++)
-                            totalDist += (_testNavPath[i] - _testNavPath[i + 1]).Length;
-
-                        _renderer.SetTestNavPath(_testNavStartPoint, closestHit, _testNavPath);
-                        _console?.LogSuccess($"Path found: {_testNavPath.Count} waypoints, {totalDist:F1} yards, {sw.ElapsedMilliseconds} ms");
+                        if (_testNavPath != null)
+                        {
+                            float pathMeters = _testNavPathDistanceYards * 0.9144f;
+                            float directMeters = _testNavDirectDistanceYards * 0.9144f;
+                            float detourFactor = _testNavDirectDistanceYards > 0.001f
+                                ? _testNavPathDistanceYards / _testNavDirectDistanceYards
+                                : 0f;
+                            _console?.LogSuccess(
+                                $"Path found: {_testNavPath.Count} waypoints | {_testNavPathDistanceYards:F1} yd / {pathMeters:F1} m | straight {_testNavDirectDistanceYards:F1} yd / {directMeters:F1} m | x{detourFactor:F2} | {_testNavLastSolveMs} ms");
+                        }
+                        else
+                        {
+                            float directMeters = _testNavDirectDistanceYards * 0.9144f;
+                            _console?.LogError(
+                                $"No path found | straight {_testNavDirectDistanceYards:F1} yd / {directMeters:F1} m | {_testNavLastSolveMs} ms");
+                        }
                     }
                     else
                     {
-                        _renderer.SetTestNavPath(_testNavStartPoint, closestHit, null);
-                        _console?.LogError($"No path found between start and end ({sw.ElapsedMilliseconds} ms)");
+                        UpdateTestNavVisualization();
+                        _console?.Log("Test Nav: Shift+Click to place Start");
                     }
-
-                    // Reset for next attempt (keep displaying result)
-                    _testNavStartPoint = null;
-                    _testNavStartPolyIndex = -1;
                 }
             }
             catch (Exception ex)
