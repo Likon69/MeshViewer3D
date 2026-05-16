@@ -92,7 +92,7 @@ namespace MeshViewer3D.UI
             // Dessiner tile courante
             if (_currentTileX >= 0 && _currentTileY >= 0)
             {
-                using var brush = new SolidBrush(Color.FromArgb(200, 255, 100, 0)); // Orange
+                using var brush = new SolidBrush(Color.FromArgb(220, 220, 30, 30)); // Rouge (comme HB)
                 g.FillRectangle(
                     brush,
                     offsetX + _currentTileX * scale - 1,
