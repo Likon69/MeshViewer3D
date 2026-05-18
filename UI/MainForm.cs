@@ -45,6 +45,9 @@ namespace MeshViewer3D.UI
         private WmoBlacklistPanel? _wmoBlacklistPanel;
         private PerModelPanel? _perModelPanel;
         private ToolStripMenuItem? _freeCameraMenuItem;
+        private Button? _collapseBtn;
+        private bool _rightPanelCollapsed = false;
+        private int _savedSplitDistance = -1;
 
         // État
         private NavMeshData? _currentMesh;
@@ -502,22 +505,50 @@ namespace MeshViewer3D.UI
                 BackColor = Color.FromArgb(37, 37, 38)
             };
 
-            // Minimap — docked to top of right panel
+            // Inner panel holds minimap + tabs — added FIRST so Fill docks after Left button
+            var rightInnerPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = Color.FromArgb(37, 37, 38)
+            };
+            rightPanel.Controls.Add(rightInnerPanel);
+
+            // Collapse/expand toggle — narrow vertical strip docked to left edge of right panel
+            // Added AFTER inner panel so WinForms docks it first (takes 20px), inner panel fills rest
+            _collapseBtn = new Button
+            {
+                Dock = DockStyle.Left,
+                Width = 20,
+                Text = "◄",
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(50, 50, 50),
+                ForeColor = Color.White,
+                Font = new Font("Consolas", 8, FontStyle.Bold),
+                TextAlign = ContentAlignment.MiddleCenter,
+                Cursor = Cursors.Hand,
+                TabStop = false
+            };
+            _collapseBtn.FlatAppearance.BorderSize = 0;
+            _collapseBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(80, 80, 80);
+            _collapseBtn.Click += ToggleRightPanel;
+            rightPanel.Controls.Add(_collapseBtn);
+
+            // Minimap — created here, added to GL viewport panel below (floats over 3D view, always visible)
             _minimap = new MinimapControl
             {
-                Dock = DockStyle.Top,
-                Height = 150
+                Size = new Size(150, 150),
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
             };
-            rightPanel.Controls.Add(_minimap);
 
-            // TabControl d'édition — fills remaining space below minimap
+            // TabControl d'édition — fills remaining space, tab strip on right edge
             _editorTabs = new TabControl
             {
                 Dock = DockStyle.Fill,
                 BackColor = Color.FromArgb(30, 30, 30),
-                ForeColor = Color.White
+                ForeColor = Color.White,
+                Alignment = TabAlignment.Right
             };
-            rightPanel.Controls.Add(_editorTabs);
+            rightInnerPanel.Controls.Add(_editorTabs);
             // Dock.Fill must be added BEFORE Dock.Top for correct z-order
             _editorTabs.BringToFront();
 
@@ -531,6 +562,8 @@ namespace MeshViewer3D.UI
             _settingsPanel.VolumesChanged     += (s, e) => { if (_renderer != null) _renderer.ShowVolumes      = e; };
             _settingsPanel.TerrainChanged     += (s, e) => { if (_renderer != null) _renderer.ShowTerrain      = e; };
             _settingsPanel.ColorModeChanged   += (s, mode) => { if (_renderer != null) _renderer.ColorMode = mode; _console?.Log($"Color mode: {mode}"); };
+            _settingsPanel.WireframeAlphaChanged += (s, v) => { if (_renderer != null) _renderer.WireAlpha = v; };
+            _settingsPanel.MeshAlphaChanged   += (s, v) => { if (_renderer != null) _renderer.MeshFillAlpha = v / 100f; };
             var settingsTab = new TabPage("Settings") { BackColor = Color.FromArgb(37, 37, 38) };
             settingsTab.Controls.Add(_settingsPanel);
             _editorTabs.TabPages.Add(settingsTab);
@@ -637,7 +670,8 @@ namespace MeshViewer3D.UI
                 Orientation = Orientation.Vertical,
                 BackColor = Color.FromArgb(60, 60, 60),
                 SplitterWidth = 5,
-                FixedPanel = FixedPanel.Panel2
+                FixedPanel = FixedPanel.Panel2,
+                Panel2MinSize = 20
             };
             _splitMain.Panel1.Controls.Add(_splitViewport);
             _splitMain.Panel2.Controls.Add(rightPanel);
@@ -658,12 +692,16 @@ namespace MeshViewer3D.UI
                     _splitViewport.SplitterDistance = AppSettings.SplitViewportDistance;
                 else
                     _splitViewport.SplitterDistance = Math.Max(100, _splitViewport.Height - 120);
+
+                // Position minimap at top-right of GL viewport (Anchor keeps it there on resize)
+                _minimap.Location = new Point(_splitViewport.Panel1.Width - _minimap.Width - 5, 5);
             };
 
             // Save positions on close
             this.FormClosing += (_, _) =>
             {
-                AppSettings.SplitMainDistance = _splitMain.SplitterDistance;
+                // Save the real (expanded) distance even if currently collapsed
+                AppSettings.SplitMainDistance = _rightPanelCollapsed ? _savedSplitDistance : _splitMain.SplitterDistance;
                 AppSettings.SplitViewportDistance = _splitViewport.SplitterDistance;
                 AppSettings.Save();
             };
@@ -681,6 +719,10 @@ namespace MeshViewer3D.UI
             };
             _splitViewport.Panel1.Controls.Add(_overlayLabel);
             _overlayLabel.BringToFront();
+
+            // Minimap floats over GL viewport — anchored top-right, always visible even when panel collapsed
+            _splitViewport.Panel1.Controls.Add(_minimap);
+            _minimap.BringToFront();
 
             _testNavStartTag = new Label
             {
@@ -1582,6 +1624,30 @@ namespace MeshViewer3D.UI
 
             float frameStep = speed * deltaTime;
             _camera.TranslateLocal(move.Z * frameStep, move.X * frameStep, move.Y * frameStep);
+        }
+
+        private void ToggleRightPanel(object? sender, EventArgs e)
+        {
+            if (_splitMain == null || _collapseBtn == null) return;
+
+            if (!_rightPanelCollapsed)
+            {
+                // Collapse: save current distance then shrink Panel2 to just the button strip
+                _savedSplitDistance = _splitMain.SplitterDistance;
+                _splitMain.SplitterDistance = _splitMain.Width - 20 - _splitMain.SplitterWidth;
+                _collapseBtn.Text = "►";
+                _rightPanelCollapsed = true;
+            }
+            else
+            {
+                // Expand: restore saved distance
+                int dist = _savedSplitDistance > 0
+                    ? _savedSplitDistance
+                    : Math.Max(200, _splitMain.Width - 260);
+                _splitMain.SplitterDistance = dist;
+                _collapseBtn.Text = "◄";
+                _rightPanelCollapsed = false;
+            }
         }
 
         private void OnBlackspotClickModeToggled(object? sender, bool enabled)
