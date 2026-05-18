@@ -284,5 +284,113 @@ namespace MeshViewer3D.Core
         {
             return (b.X - a.X) * (p.Z - a.Z) - (b.Z - a.Z) * (p.X - a.X);
         }
-    }
+        /// <summary>
+        /// Bakes custom offmesh connections directly into the navmesh tile data.
+        /// Equivalent to HB's baked dtOffMeshConnection — no re-extraction needed.
+        ///
+        /// For each connection, appends:
+        ///   - 2 vertices (start + end, Detour coords)
+        ///   - 1 NavPoly  (type=1 = DT_POLYTYPE_OFFMESH_CONNECTION, vertCount=2)
+        ///   - 1 OffMeshConnection struct (radius, poly index, side=0xFF, userId=0xFFFFFFFF)
+        ///   - 2 NavLink  slots (pre-allocated, filled at runtime by dtNavMesh::addTile)
+        ///
+        /// DetailMeshes is intentionally NOT extended — Detour only creates detail meshes
+        /// for ground polys, not offmesh polys (detailMeshCount = OffMeshBase = ground count).
+        /// </summary>
+        /// <param name="mesh">Tile to modify in-place.</param>
+        /// <param name="customs">Custom connections to bake (Start/End in Detour coords).</param>
+        /// <returns>Number of connections baked.</returns>
+        public static int BakeOffMeshConnections(NavMeshData mesh, IReadOnlyList<OffMeshConnection> customs)
+        {
+            if (mesh == null) throw new ArgumentNullException(nameof(mesh));
+            if (customs == null || customs.Count == 0) return 0;
+
+            int n = customs.Count;
+            const uint DT_NULL_LINK = 0xFFFFFFFF;
+
+            // --- 1. Extend Vertices (+2 per connection) ---
+            int oldVertCount = mesh.Vertices.Length;
+            var newVerts = new Vector3[oldVertCount + 2 * n];
+            Array.Copy(mesh.Vertices, newVerts, oldVertCount);
+            for (int i = 0; i < n; i++)
+            {
+                newVerts[oldVertCount + 2 * i]     = customs[i].Start;
+                newVerts[oldVertCount + 2 * i + 1] = customs[i].End;
+            }
+            mesh.Vertices = newVerts;
+
+            // --- 2. Extend Polys (+1 per connection, appended after existing polys) ---
+            int oldPolyCount = mesh.Polys.Length;
+            var newPolys = new NavPoly[oldPolyCount + n];
+            Array.Copy(mesh.Polys, newPolys, oldPolyCount);
+            for (int i = 0; i < n; i++)
+            {
+                var p = NavPoly.Create();
+                p.FirstLink  = DT_NULL_LINK;
+                p.Verts[0]   = (ushort)(oldVertCount + 2 * i);
+                p.Verts[1]   = (ushort)(oldVertCount + 2 * i + 1);
+                p.VertCount  = 2;
+                p.Flags      = 0x0001; // NavTerrainFlag.Walk
+                // AreaAndType: upper 2 bits = poly type, lower 6 bits = area
+                // DT_POLYTYPE_OFFMESH_CONNECTION = 1, area = NAV_GROUND = 1
+                p.AreaAndType = (byte)((1 << 6) | 1);
+                newPolys[oldPolyCount + i] = p;
+            }
+            mesh.Polys = newPolys;
+
+            // --- 3. Extend OffMeshConnections (+1 per connection) ---
+            int oldOMCount = mesh.OffMeshConnections.Length;
+            var newOM = new OffMeshConnection[oldOMCount + n];
+            Array.Copy(mesh.OffMeshConnections, newOM, oldOMCount);
+            for (int i = 0; i < n; i++)
+            {
+                float radius = customs[i].Radius > 0f ? customs[i].Radius : mesh.Header.WalkableRadius;
+                newOM[oldOMCount + i] = new OffMeshConnection
+                {
+                    Start  = customs[i].Start,
+                    End    = customs[i].End,
+                    Radius = radius,
+                    Poly   = (ushort)(oldPolyCount + i), // index of the new poly
+                    Flags  = customs[i].IsBidirectional ? OffMeshConnection.FLAG_BIDIRECTIONAL : (byte)0,
+                    Side   = 0xFF,         // DT_CONN_SIDE: no preferred side (matches HB)
+                    UserId = 0xFFFFFFFF    // matches HB binary extraction
+                };
+            }
+            mesh.OffMeshConnections = newOM;
+
+            // --- 4. Extend Links (+2 per connection: pre-allocated slots, Detour fills at runtime) ---
+            int oldLinkCount = mesh.Links.Length;
+            var newLinks = new NavLink[oldLinkCount + 2 * n];
+            Array.Copy(mesh.Links, newLinks, oldLinkCount);
+            for (int i = 0; i < 2 * n; i++)
+            {
+                newLinks[oldLinkCount + i] = new NavLink
+                {
+                    Ref  = 0,
+                    Next = DT_NULL_LINK,
+                    Edge = 0,
+                    Side = 0,
+                    BMin = 0,
+                    BMax = 0
+                };
+            }
+            mesh.Links = newLinks;
+
+            // --- 5. Update header ---
+            // - VertCount   += 2*n
+            // - PolyCount   += n
+            // - OffMeshConCount += n
+            // - OffMeshBase  = PolyCount - OffMeshConCount  (= original ground poly count, unchanged)
+            // - MaxLinkCount += 2*n
+            // - DetailMeshCount unchanged (detail meshes exist for ground polys only)
+            var h = mesh.Header;
+            h.VertCount      += 2 * n;
+            h.PolyCount      += n;
+            h.OffMeshConCount += n;
+            h.OffMeshBase     = h.PolyCount - h.OffMeshConCount;
+            h.MaxLinkCount   += 2 * n;
+            mesh.Header = h;
+
+            return n;
+        }    }
 }
