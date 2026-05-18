@@ -836,11 +836,11 @@ namespace MeshViewer3D.Rendering
         {
             var lineData = new List<float>();
 
-            // Cyan — couleur par défaut des off-mesh tile (bidirectionnel)
+            // Cyan — native tile off-mesh connections rendered as straight hollow tubes
             const float r = 0f, g = 1f, b = 1f;
 
             foreach (var con in mesh.OffMeshConnections)
-                AddOffMeshArcVertices(lineData, con.Start, con.End, r, g, b);
+                AddOffMeshTubeVertices(lineData, con.Start, con.End, r, g, b);
 
             if (lineData.Count == 0) return;
 
@@ -860,6 +860,61 @@ namespace MeshViewer3D.Rendering
 
             _offmeshVertexCount = lineData.Count / 6;
             GL.BindVertexArray(0);
+        }
+
+        /// <summary>
+        /// Straight hollow tube for native tile off-mesh connections.
+        /// Two parallel rails + open circle rings at each endpoint — visually distinct from custom jump arc.
+        /// </summary>
+        private static void AddOffMeshTubeVertices(List<float> verts, Vector3 start, Vector3 end, float r, float g, float b)
+        {
+            const int   circleSegs  = 10;
+            const float tubeRadius  = 0.35f; // gap size — increase for wider tube
+            const int   railCount   = 4;     // number of parallel rails around the tube axis
+
+            // Direction along the tube
+            Vector3 axis = end - start;
+            float axisLen = axis.Length;
+            if (axisLen < 0.001f) return;
+            Vector3 axisN = axis / axisLen;
+
+            // Build a stable perpendicular basis
+            Vector3 up = MathF.Abs(axisN.Y) < 0.9f ? Vector3.UnitY : Vector3.UnitX;
+            Vector3 right = Vector3.Normalize(Vector3.Cross(up, axisN));
+            Vector3 fwd   = Vector3.Normalize(Vector3.Cross(axisN, right));
+
+            // 1. Open circle ring at start (XZ-ish plane perpendicular to tube)
+            for (int i = 0; i < circleSegs; i++)
+            {
+                float a0 = (float)i       / circleSegs * MathF.Tau;
+                float a1 = (float)(i + 1) / circleSegs * MathF.Tau;
+                var p0 = start + (right * MathF.Cos(a0) + fwd * MathF.Sin(a0)) * tubeRadius;
+                var p1 = start + (right * MathF.Cos(a1) + fwd * MathF.Sin(a1)) * tubeRadius;
+                verts.Add(p0.X); verts.Add(p0.Y); verts.Add(p0.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+                verts.Add(p1.X); verts.Add(p1.Y); verts.Add(p1.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+            }
+
+            // 2. Open circle ring at end
+            for (int i = 0; i < circleSegs; i++)
+            {
+                float a0 = (float)i       / circleSegs * MathF.Tau;
+                float a1 = (float)(i + 1) / circleSegs * MathF.Tau;
+                var p0 = end + (right * MathF.Cos(a0) + fwd * MathF.Sin(a0)) * tubeRadius;
+                var p1 = end + (right * MathF.Cos(a1) + fwd * MathF.Sin(a1)) * tubeRadius;
+                verts.Add(p0.X); verts.Add(p0.Y); verts.Add(p0.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+                verts.Add(p1.X); verts.Add(p1.Y); verts.Add(p1.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+            }
+
+            // 3. Straight rails connecting the two rings
+            for (int i = 0; i < railCount; i++)
+            {
+                float a = (float)i / railCount * MathF.Tau;
+                var offset = (right * MathF.Cos(a) + fwd * MathF.Sin(a)) * tubeRadius;
+                var s = start + offset;
+                var e = end   + offset;
+                verts.Add(s.X); verts.Add(s.Y); verts.Add(s.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+                verts.Add(e.X); verts.Add(e.Y); verts.Add(e.Z); verts.Add(r); verts.Add(g); verts.Add(b);
+            }
         }
 
         /// <summary>
