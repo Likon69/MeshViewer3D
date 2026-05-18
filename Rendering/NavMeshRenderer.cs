@@ -90,6 +90,10 @@ namespace MeshViewer3D.Rendering
         private bool _showTerrain = true;
         private bool _terrainRenderLogged = false;
 
+        // Adjustments (driven by Settings sliders)
+        private int _wireAlpha = 60;         // 0-255 wireframe line opacity
+        private float _meshFillAlpha = 1.0f; // 0.0-1.0 navmesh polygon fill opacity
+
         // Raytrace marker
         private int _raytraceVao, _raytraceVbo;
         private int _raytraceVertexCount;
@@ -153,15 +157,13 @@ namespace MeshViewer3D.Rendering
             // Générer données de rendu
             var (verts, indices, areas) = mesh.GenerateRenderData();
 
-            // For ByComponent mode, compute connected components and per-polygon colors
+            // Per-polygon color modes: build vertexIndex → polyIndex mapping
             System.Drawing.Color[]? componentColors = null;
             int[]? polyOfVertex = null;
-            if (_colorMode == ColorMode.ByComponent)
-            {
-                var components = Core.NavMeshAnalyzer.FindConnectedComponents(mesh, out int componentCount);
-                componentColors = Core.NavMeshAnalyzer.GenerateComponentColors(mesh, components, componentCount);
 
-                // Build mapping: vertexIndex → polyIndex (one entry per vertex)
+            bool needPolyMap = _colorMode == ColorMode.ByComponent || _colorMode == ColorMode.ByPolygon;
+            if (needPolyMap)
+            {
                 var vtxToPoly = new List<int>();
                 for (int pi = 0; pi < mesh.Polys.Length; pi++)
                 {
@@ -171,6 +173,12 @@ namespace MeshViewer3D.Rendering
                         vtxToPoly.Add(pi);
                 }
                 polyOfVertex = vtxToPoly.ToArray();
+            }
+
+            if (_colorMode == ColorMode.ByComponent)
+            {
+                var components = Core.NavMeshAnalyzer.FindConnectedComponents(mesh, out int componentCount);
+                componentColors = Core.NavMeshAnalyzer.GenerateComponentColors(mesh, components, componentCount);
             }
 
             // Créer vertex data avec couleurs
@@ -201,7 +209,20 @@ namespace MeshViewer3D.Rendering
                         ? ColorScheme.GetHeightColor(verts[i].Y, minHeight, maxHeight)
                         : ColorScheme.GetHeightColorObstacle(verts[i].Y, minHeight, maxHeight);
                 }
-                else
+                else if (_colorMode == ColorMode.ByPolygon && polyOfVertex != null)
+                {
+                    int polyIdx = i < polyOfVertex.Length ? polyOfVertex[i] : 0;
+                    color = ColorScheme.GetPolygonDebugColor(polyIdx);
+                }
+                else if (_colorMode == ColorMode.Flat)
+                {
+                    // Uniform flat color — walkable=light green, unwalkable=dark red
+                    bool walkable = area > 0 && area < 63;
+                    color = walkable
+                        ? System.Drawing.Color.FromArgb(100, 180, 100)
+                        : System.Drawing.Color.FromArgb(160, 60, 60);
+                }
+                else // ByAreaType (default)
                 {
                     color = ColorScheme.GetAreaColor(area);
                 }
@@ -860,41 +881,48 @@ namespace MeshViewer3D.Rendering
                 1f, 10000f
             );
 
+            // Render terrain heightmap — independent of navmesh fill toggle.
+            // Must render BEFORE navmesh so depth buffer is populated correctly.
+            if (_showTerrain && _terrainRenderers.Count > 0 && _terrainShader != null)
+            {
+                if (!_terrainRenderLogged)
+                {
+                    int totalVerts = 0, totalTris = 0;
+                    foreach (var tr in _terrainRenderers) { totalVerts += tr.TotalVerts; totalTris += tr.TotalTris; }
+                    Log($"Rendering terrain: {_terrainRenderers.Count} tile(s), {totalVerts} verts, {totalTris} tris");
+                    _terrainRenderLogged = true;
+                }
+
+                GL.Enable(EnableCap.Blend);
+                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+
+                foreach (var tr in _terrainRenderers)
+                    tr.Render(view, projection, _terrainShader);
+
+                GL.Disable(EnableCap.Blend);
+            }
+
             // Render navmesh polygon fill
             if (_showNavMeshFill)
-                {
-                    // Render terrain heightmap first as opaque base layer (must precede navmesh so depth
-                    // test passes — terrain at GL_LESS equal depth to navmesh would be rejected otherwise).
-                    if (_showTerrain && _terrainRenderers.Count > 0 && _terrainShader != null)
-                    {
-                        if (!_terrainRenderLogged)
-                        {
-                            int totalVerts = 0, totalTris = 0;
-                            foreach (var tr in _terrainRenderers) { totalVerts += tr.TotalVerts; totalTris += tr.TotalTris; }
-                            Log($"Rendering terrain: {_terrainRenderers.Count} tile(s), {totalVerts} verts, {totalTris} tris");
-                            _terrainRenderLogged = true;
-                        }
-
-                        GL.Enable(EnableCap.Blend);
-                        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-
-                        foreach (var tr in _terrainRenderers)
-                            tr.Render(view, projection, _terrainShader);
-
-                        GL.Disable(EnableCap.Blend);
-                    }
-
+            {
                 _meshShader.Use();
                 _meshShader.SetMatrix4("uModel", model);
                 _meshShader.SetMatrix4("uView", view);
                 _meshShader.SetMatrix4("uProjection", projection);
                 _meshShader.SetBool("uEnableLighting", _enableLighting);
                 _meshShader.SetBool("uEnableFog", false);
-                _meshShader.SetFloat("uAlpha", 1.0f);
+                _meshShader.SetFloat("uAlpha", _meshFillAlpha);
                 _meshShader.SetVector3("uCameraPos", camera.GetEyePosition());
 
+                if (_meshFillAlpha < 1.0f)
+                {
+                    GL.Enable(EnableCap.Blend);
+                    GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                }
                 GL.BindVertexArray(_meshVao);
                 GL.DrawElements(PrimitiveType.Triangles, _meshVertexCount, DrawElementsType.UnsignedInt, 0);
+                if (_meshFillAlpha < 1.0f)
+                    GL.Disable(EnableCap.Blend);
             }
 
             // Render wireframe
@@ -906,10 +934,14 @@ namespace MeshViewer3D.Rendering
                 _lineShader.SetMatrix4("uProjection", projection);
                 
                 var wireColor = ColorScheme.ColorToVector4(ColorScheme.Wireframe);
+                wireColor.W = _wireAlpha / 255f; // Controlled by Wire Alpha slider
                 _lineShader.SetVector4("uColor", wireColor);
 
+                GL.Enable(EnableCap.Blend);
+                GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
                 GL.BindVertexArray(_wireVao);
                 GL.DrawElements(PrimitiveType.Lines, _wireVertexCount, DrawElementsType.UnsignedInt, 0);
+                GL.Disable(EnableCap.Blend);
             }
 
             // Render tile seam borders (thick dark-green lines at tile boundaries)
@@ -1142,6 +1174,18 @@ namespace MeshViewer3D.Rendering
         {
             get => _showTerrain;
             set => _showTerrain = value;
+        }
+
+        public int WireAlpha
+        {
+            get => _wireAlpha;
+            set => _wireAlpha = Math.Clamp(value, 0, 255);
+        }
+
+        public float MeshFillAlpha
+        {
+            get => _meshFillAlpha;
+            set => _meshFillAlpha = Math.Clamp(value, 0f, 1f);
         }
 
         public bool ShowVolumes
