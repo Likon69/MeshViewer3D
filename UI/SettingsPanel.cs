@@ -37,7 +37,7 @@ namespace MeshViewer3D.UI
         public event EventHandler<bool>? TerrainChanged;
         public event EventHandler<ColorMode>? ColorModeChanged;
         public event EventHandler<int>? WireframeAlphaChanged;
-        public event EventHandler<int>? FogDensityChanged;
+        public event EventHandler<int>? MeshAlphaChanged;
 
         public SettingsPanel()
         {
@@ -48,6 +48,7 @@ namespace MeshViewer3D.UI
         {
             this.BackColor = Color.FromArgb(37, 37, 38);
             this.Dock = DockStyle.Fill;
+            this.AutoScroll = true;
 
             int y = 10;
 
@@ -203,9 +204,10 @@ namespace MeshViewer3D.UI
             y += 40;
 
             // Fog Density
+            // Fog Density renamed to Mesh Alpha (navmesh fill opacity %)
             var lblFogLabel = new Label
             {
-                Text = "Fog Density:",
+                Text = "Mesh Alpha:",
                 Location = new Point(10, y),
                 AutoSize = true,
                 ForeColor = Color.White
@@ -214,7 +216,7 @@ namespace MeshViewer3D.UI
 
             _lblFog = new Label
             {
-                Text = "0",
+                Text = "100",
                 Location = new Point(180, y),
                 AutoSize = true,
                 ForeColor = Color.LightGray
@@ -228,14 +230,14 @@ namespace MeshViewer3D.UI
                 Size = new Size(200, 30),
                 Minimum = 0,
                 Maximum = 100,
-                Value = 0,
+                Value = 100,
                 TickFrequency = 10,
                 BackColor = Color.FromArgb(37, 37, 38)
             };
             _trkFog.ValueChanged += (s, e) =>
             {
                 _lblFog.Text = _trkFog.Value.ToString();
-                FogDensityChanged?.Invoke(this, _trkFog.Value);
+                MeshAlphaChanged?.Invoke(this, _trkFog.Value);
             };
             this.Controls.Add(_trkFog);
             y += 70;
