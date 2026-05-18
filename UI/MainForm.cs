@@ -451,6 +451,7 @@ namespace MeshViewer3D.UI
             meshMenu.DropDownItems.Add("Save Volumes...", null, OnSaveVolumes);
             meshMenu.DropDownItems.Add(new ToolStripSeparator());
             meshMenu.DropDownItems.Add("Bake Blackspots into Tile", null, OnBakeBlackspots);
+            meshMenu.DropDownItems.Add("Bake Jump Links into Tile", null, OnBakeOffMeshConnections);
             meshMenu.DropDownItems.Add("Save Modified Tile (.mmtile)...", null, OnSaveModifiedTile);
             menuStrip.Items.Add(meshMenu);
 
@@ -2585,6 +2586,28 @@ namespace MeshViewer3D.UI
             _renderer.LoadMesh(_currentMesh);
             _renderer.LoadEditableElements(_editableElements);
             _console?.LogSuccess($"Bake blackspots: {result.PolysMarked}/{result.PolysTotal} polys marked unwalkable ({_editableElements.Blackspots.Count} blackspots)");
+        }
+
+        private void OnBakeOffMeshConnections(object? sender, EventArgs e)
+        {
+            if (_currentMesh == null || _renderer == null)
+            {
+                _console?.LogWarning("No mesh loaded — cannot bake jump links.");
+                return;
+            }
+            if (_editableElements.CustomOffMeshConnections.Count == 0)
+            {
+                _console?.LogWarning("No jump links placed — nothing to bake. Use Ctrl+Click in the Jump Links tab.");
+                return;
+            }
+
+            int n = MeshBaker.BakeOffMeshConnections(_currentMesh, _editableElements.CustomOffMeshConnections);
+            // Clear custom list — they are now part of the tile data, re-baking would duplicate them
+            _editableElements.CustomOffMeshConnections.Clear();
+            _jumpLinksPanel?.UpdateElements(_editableElements);
+            _renderer.LoadMesh(_currentMesh);
+            _renderer.LoadEditableElements(_editableElements);
+            _console?.LogSuccess($"Baked {n} jump link(s) into tile — {_currentMesh.Header.OffMeshConCount} total offmesh connections. Use 'Save Modified Tile' to write the .mmtile.");
         }
 
         // ========== Toolbar handlers (HB conformity) ==========
