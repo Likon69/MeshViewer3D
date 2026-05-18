@@ -36,7 +36,7 @@ void main()
     }
     
     // Alpha override (pour transparence des blackspots/volumes)
-    if (uAlpha > 0.0 && uAlpha < 1.0)
+    if (uAlpha < 1.0)
     {
         alpha = uAlpha;
     }

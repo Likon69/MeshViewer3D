@@ -836,11 +836,11 @@ namespace MeshViewer3D.Rendering
         {
             var lineData = new List<float>();
 
-            // Cyan — native tile off-mesh connections rendered as straight hollow tubes
+            // Cyan — native tile off-mesh connections rendered as parabolic arcs (same style as HB)
             const float r = 0f, g = 1f, b = 1f;
 
             foreach (var con in mesh.OffMeshConnections)
-                AddOffMeshTubeVertices(lineData, con.Start, con.End, r, g, b);
+                AddOffMeshArcVertices(lineData, con.Start, con.End, r, g, b);
 
             if (lineData.Count == 0) return;
 
@@ -931,7 +931,7 @@ namespace MeshViewer3D.Rendering
             var model = Matrix4.Identity;
             var view = camera.GetViewMatrix();
             var projection = Matrix4.CreatePerspectiveFieldOfView(
-                MathHelper.DegreesToRadians(60f),
+                camera.FieldOfView,
                 (float)viewportWidth / viewportHeight,
                 1f, 10000f
             );
@@ -1007,7 +1007,7 @@ namespace MeshViewer3D.Rendering
                 _coloredLineShader.SetMatrix4("uView", view);
                 _coloredLineShader.SetMatrix4("uProjection", projection);
 
-                GL.LineWidth(6.0f);
+                GL.LineWidth(1.0f);
                 GL.BindVertexArray(_tileSeamVao);
                 GL.DrawArrays(PrimitiveType.Lines, 0, _tileSeamVertexCount);
                 GL.LineWidth(1.0f);
@@ -1277,17 +1277,17 @@ namespace MeshViewer3D.Rendering
                         waypoints[i + 1],
                         1.4f,
                         1.0f,
-                        18f / 255f,
-                        18f / 255f,
-                        18f / 255f);
+                        255f / 255f,
+                        230f / 255f,
+                        0f);
                 }
             }
 
             if (startPos.HasValue)
-                AddAgentMarkerVertices(vertexData, startPos.Value, 2.0f, 3.5f, 128f / 255f, 25f / 255f, 0f);
+                AddAgentMarkerVertices(vertexData, startPos.Value, 2.0f, 3.5f, 220f / 255f, 50f / 255f, 50f / 255f);
 
             if (endPos.HasValue)
-                AddAgentMarkerVertices(vertexData, endPos.Value, 2.0f, 3.5f, 51f / 255f, 102f / 255f, 0f);
+                AddAgentMarkerVertices(vertexData, endPos.Value, 2.0f, 3.5f, 50f / 255f, 220f / 255f, 50f / 255f);
 
             if (vertexData.Count == 0) return;
 

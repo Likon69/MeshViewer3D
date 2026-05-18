@@ -148,7 +148,7 @@ namespace MeshViewer3D.UI
                 BackColor = Color.FromArgb(45, 45, 48),
                 ForeColor = Color.White
             };
-            _cmbColorMode.Items.AddRange(new object[] { "By Area Type", "By Height", "By Polygon", "Flat" });
+            _cmbColorMode.Items.AddRange(new object[] { "By Area Type", "By Height", "By Polygon", "By Component", "Flat" });
             _cmbColorMode.SelectedIndex = 0;
             _cmbColorMode.SelectedIndexChanged += CmbColorMode_SelectedIndexChanged;
             this.Controls.Add(_cmbColorMode);
@@ -286,7 +286,8 @@ namespace MeshViewer3D.UI
                 0 => ColorMode.ByAreaType,
                 1 => ColorMode.ByHeight,
                 2 => ColorMode.ByPolygon,
-                3 => ColorMode.Flat,
+                3 => ColorMode.ByComponent,
+                4 => ColorMode.Flat,
                 _ => ColorMode.ByAreaType
             };
             ColorModeChanged?.Invoke(this, mode);

@@ -1545,6 +1545,7 @@ namespace MeshViewer3D.UI
             if (_renderer == null || sender is not ToolStripMenuItem item) return;
             item.Checked = !item.Checked;
             _renderer.ShowWireframe = item.Checked;
+            if (_settingsPanel != null) _settingsPanel.ShowWireframe = item.Checked;
             _console?.Log($"Wireframe: {(item.Checked ? "ON" : "OFF")}");
         }
 
@@ -1553,6 +1554,7 @@ namespace MeshViewer3D.UI
             if (_renderer == null || sender is not ToolStripMenuItem item) return;
             item.Checked = !item.Checked;
             _renderer.ShowOffMesh = item.Checked;
+            if (_settingsPanel != null) _settingsPanel.ShowOffMesh = item.Checked;
             _console?.Log($"OffMesh: {(item.Checked ? "ON" : "OFF")}");
         }
 
@@ -1561,6 +1563,7 @@ namespace MeshViewer3D.UI
             if (_renderer == null || sender is not ToolStripMenuItem item) return;
             item.Checked = !item.Checked;
             _renderer.EnableLighting = item.Checked;
+            if (_settingsPanel != null) _settingsPanel.ShowLighting = item.Checked;
             _console?.Log($"Lighting: {(item.Checked ? "ON" : "OFF")}");
         }
 

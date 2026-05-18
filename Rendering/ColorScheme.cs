@@ -21,8 +21,8 @@ namespace MeshViewer3D.Rendering
     /// </summary>
     public static class ColorScheme
     {
-        // Couleur de fond (bleu-gris comme HB)
-        public static readonly Color Background = Color.FromArgb(100, 120, 140);
+        // Couleur de fond (bleu ciel comme HB)
+        public static readonly Color Background = Color.FromArgb(120, 170, 220);
 
         // Wireframe (blanc semi-transparent comme HB)
         public static readonly Color Wireframe = Color.FromArgb(60, 255, 255, 255);

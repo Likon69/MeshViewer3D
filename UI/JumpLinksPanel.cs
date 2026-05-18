@@ -247,6 +247,7 @@ namespace MeshViewer3D.UI
                 
                 _nudRadius.Value = (decimal)conn.Radius;
                 _chkBidirectional.Checked = conn.IsBidirectional;
+                _cmbType.SelectedIndex = ConnectionTypeToIndex(conn.ConnectionType);
                 
                 _elements.SelectedType = EditableElementType.OffMeshConnection;
                 _elements.SelectedOffMeshIndex = _listBox.SelectedIndex;
@@ -340,6 +341,7 @@ namespace MeshViewer3D.UI
                 conn.End = new Vector3((float)_nudEndX.Value, (float)_nudEndY.Value, (float)_nudEndZ.Value);
                 conn.Radius = (float)_nudRadius.Value;
                 conn.Flags = _chkBidirectional.Checked ? (byte)1 : (byte)0;
+                conn.ConnectionType = IndexToConnectionType(_cmbType.SelectedIndex);
                 
                 _elements.CustomOffMeshConnections[_listBox.SelectedIndex] = conn;
                 RefreshList();
@@ -411,5 +413,23 @@ namespace MeshViewer3D.UI
             _elements = elements;
             RefreshList();
         }
+
+        private static OffMeshConnectionType IndexToConnectionType(int index) => index switch
+        {
+            1 => OffMeshConnectionType.Elevator,
+            2 => OffMeshConnectionType.Portal,
+            3 => OffMeshConnectionType.Boat,
+            4 => OffMeshConnectionType.Jump,
+            _ => OffMeshConnectionType.Jump,  // 0 = Normal
+        };
+
+        private static int ConnectionTypeToIndex(OffMeshConnectionType type) => type switch
+        {
+            OffMeshConnectionType.Elevator => 1,
+            OffMeshConnectionType.Portal   => 2,
+            OffMeshConnectionType.Boat     => 3,
+            OffMeshConnectionType.Jump     => 4,
+            _                              => 0, // Normal
+        };
     }
 }
