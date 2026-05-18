@@ -2,7 +2,7 @@
 
 A 3D navigation mesh viewer and editor for WoW 3.3.5a (build 12340), built to replicate and extend the workflow of Honorbuddy's Tripper.Renderer.
 
-![Orgrimmar](Resources/0014531.png)
+![Preview](Resources/image.png)
 
 ---
 

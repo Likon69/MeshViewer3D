@@ -1334,32 +1334,41 @@ namespace MeshViewer3D.Rendering
             }
         }
 
+        /// <summary>
+        /// Recast/Detour-style agent marker: bottom circle ring + top circle ring + 4 vertical pillars.
+        /// </summary>
         private static void AddAgentMarkerVertices(List<float> data, Vector3 pos, float radius, float height, float r, float g, float b)
         {
             const int segments = 16;
-            float ringY = pos.Y + 0.15f;
-            float topY = pos.Y + height;
+            float bottomY = pos.Y + 0.1f;
+            float topY    = pos.Y + height;
 
+            // Bottom circle
             for (int i = 0; i < segments; i++)
             {
-                float angle0 = i * MathF.Tau / segments;
-                float angle1 = (i + 1) * MathF.Tau / segments;
-
-                data.AddRange(new[]
-                {
-                    pos.X + MathF.Cos(angle0) * radius, ringY, pos.Z + MathF.Sin(angle0) * radius, r, g, b,
-                    pos.X + MathF.Cos(angle1) * radius, ringY, pos.Z + MathF.Sin(angle1) * radius, r, g, b
-                });
+                float a0 = i       * MathF.Tau / segments;
+                float a1 = (i + 1) * MathF.Tau / segments;
+                data.AddRange(new[] { pos.X + MathF.Cos(a0) * radius, bottomY, pos.Z + MathF.Sin(a0) * radius, r, g, b });
+                data.AddRange(new[] { pos.X + MathF.Cos(a1) * radius, bottomY, pos.Z + MathF.Sin(a1) * radius, r, g, b });
             }
 
-            data.AddRange(new[] { pos.X, ringY, pos.Z, r, g, b });
-            data.AddRange(new[] { pos.X, topY, pos.Z, r, g, b });
+            // Top circle
+            for (int i = 0; i < segments; i++)
+            {
+                float a0 = i       * MathF.Tau / segments;
+                float a1 = (i + 1) * MathF.Tau / segments;
+                data.AddRange(new[] { pos.X + MathF.Cos(a0) * radius, topY, pos.Z + MathF.Sin(a0) * radius, r, g, b });
+                data.AddRange(new[] { pos.X + MathF.Cos(a1) * radius, topY, pos.Z + MathF.Sin(a1) * radius, r, g, b });
+            }
 
-            float arm = radius * 0.9f;
-            data.AddRange(new[] { pos.X - arm, topY, pos.Z, r, g, b });
-            data.AddRange(new[] { pos.X + arm, topY, pos.Z, r, g, b });
-            data.AddRange(new[] { pos.X, topY, pos.Z - arm, r, g, b });
-            data.AddRange(new[] { pos.X, topY, pos.Z + arm, r, g, b });
+            // 4 vertical pillars at N/S/E/W
+            foreach (float angle in new[] { 0f, MathF.PI * 0.5f, MathF.PI, MathF.PI * 1.5f })
+            {
+                float px = pos.X + MathF.Cos(angle) * radius;
+                float pz = pos.Z + MathF.Sin(angle) * radius;
+                data.AddRange(new[] { px, bottomY, pz, r, g, b });
+                data.AddRange(new[] { px, topY,    pz, r, g, b });
+            }
         }
 
         public void SetRaytraceMarker(Vector3? position)
