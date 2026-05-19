@@ -121,6 +121,7 @@ Raytrace mode provides real-time cursor inspection of the navmesh. When active, 
    - **Tile** coordinates of the hit point
    - **Polygon index** in the navmesh
    - **AreaType name and ID** (e.g. `Ground (1)`, `Water (8)`)
+5. Press **`Ctrl+C`** at any time to copy the hit coordinates to the clipboard in extractor format `(Z X Y)` — ready to paste into a jump link file. The console also logs the tile and coords.
 
 ### Technical details
 - Ray casting uses the Möller-Trumbore algorithm (double-sided) via `RayCaster.RayTriangleIntersect`.

@@ -259,7 +259,8 @@ namespace MeshViewer3D.UI
                        "G - Go to coordinates\n" +
                        "W / L - View toggles\n" +
                        "Ctrl+S/O/N - Blackspots\n" +
-                       "Ctrl+Z/Y - Undo / Redo",
+                       "Ctrl+Z/Y - Undo / Redo\n" +
+                       "Ctrl+C - Copy raytrace coords",
                 Location = new Point(10, y),
                 Size = new Size(210, 220),
                 ForeColor = Color.Gray

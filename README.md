@@ -76,7 +76,7 @@ dotnet run
 | `W` | Toggle wireframe |
 | `L` | Toggle lighting |
 | `A` | NavMesh analysis — connected-component coloring |
-| **Raytrace** *(toolbar)* | Click any mesh point to read coords, tile, area type |
+| **Raytrace** *(toolbar)* | Hover mesh point to read coords, tile, area type — `Ctrl+C` copies coords to clipboard |
 | **Test Nav** *(toolbar)* | Click A then B — runs A\* + Funnel pathfinding |
 
 ### File shortcuts

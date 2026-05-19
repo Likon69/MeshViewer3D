@@ -362,6 +362,21 @@ namespace MeshViewer3D.UI
                 OnAnalyzeNavMesh(null, EventArgs.Empty);
                 e.Handled = true;
             }
+            // Ctrl+C — Copy raytrace hit coords to clipboard (raytrace mode only)
+            else if (e.Control && e.KeyCode == Keys.C && _raytraceMode && _raytraceHitPoint.HasValue)
+            {
+                var hit = _raytraceHitPoint.Value; // Detour space
+                var wowHit = CoordinateSystem.DetourToWow(hit);
+                var (tileX, tileY) = CoordinateSystem.WorldToTile(wowHit);
+                // Extractor format: (DetourZ DetourX DetourY)
+                int dz = (int)MathF.Round(hit.Z);
+                int dx = (int)MathF.Round(hit.X);
+                int dy = (int)MathF.Round(hit.Y);
+                string coords = $"({dz} {dx} {dy})";
+                Clipboard.SetText(coords);
+                _console?.LogSuccess($"[COPY] Tile: {tileX},{tileY}   {coords}");
+                e.Handled = true;
+            }
             // C - Toggle free camera mode
             else if (e.KeyCode == Keys.C && !e.Control && !e.Alt)
             {
