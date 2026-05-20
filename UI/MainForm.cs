@@ -1929,10 +1929,8 @@ namespace MeshViewer3D.UI
             try
             {
                 var view = _camera.GetViewMatrix();
-                var projection = Matrix4.CreatePerspectiveFieldOfView(
-                    MathHelper.DegreesToRadians(60f),
-                    (float)_glControl.Width / _glControl.Height,
-                    1f, 10000f
+                var projection = _camera.GetProjectionMatrix(
+                    (float)_glControl.Width / _glControl.Height
                 );
 
                 var ray = Rendering.RayCaster.ScreenToWorldRay(
@@ -2004,10 +2002,8 @@ namespace MeshViewer3D.UI
             try
             {
                 var view = _camera.GetViewMatrix();
-                var projection = Matrix4.CreatePerspectiveFieldOfView(
-                    MathHelper.DegreesToRadians(60f),
-                    (float)_glControl.Width / _glControl.Height,
-                    1f, 10000f
+                var projection = _camera.GetProjectionMatrix(
+                    (float)_glControl.Width / _glControl.Height
                 );
                 
                 var ray = Rendering.RayCaster.ScreenToWorldRay(
@@ -2077,10 +2073,8 @@ namespace MeshViewer3D.UI
             try
             {
                 var view = _camera.GetViewMatrix();
-                var projection = Matrix4.CreatePerspectiveFieldOfView(
-                    MathHelper.DegreesToRadians(60f),
-                    (float)_glControl.Width / _glControl.Height,
-                    1f, 10000f
+                var projection = _camera.GetProjectionMatrix(
+                    (float)_glControl.Width / _glControl.Height
                 );
                 
                 var ray = Rendering.RayCaster.ScreenToWorldRay(
@@ -2708,10 +2702,8 @@ namespace MeshViewer3D.UI
             try
             {
                 var view = _camera.GetViewMatrix();
-                var projection = Matrix4.CreatePerspectiveFieldOfView(
-                    MathHelper.DegreesToRadians(60f),
-                    (float)_glControl.Width / _glControl.Height,
-                    1f, 10000f
+                var projection = _camera.GetProjectionMatrix(
+                    (float)_glControl.Width / _glControl.Height
                 );
 
                 var ray = Rendering.RayCaster.ScreenToWorldRay(
