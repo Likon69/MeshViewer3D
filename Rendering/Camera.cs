@@ -154,6 +154,19 @@ namespace MeshViewer3D.Rendering
             Target += Vector3.UnitY * up;
         }
 
+        /// <summary>
+        /// Rotate the view direction in place (FPS-style look).
+        /// The eye position stays fixed; only the yaw/pitch change.
+        /// </summary>
+        public void FreeLook(float deltaYaw, float deltaPitch)
+        {
+            var oldEye = Eye;
+            Yaw += deltaYaw;
+            Pitch = Math.Clamp(Pitch - deltaPitch, -MaxPitch, MaxPitch);
+            // Keep eye fixed, move target to match new forward direction
+            Target = oldEye + Forward * Distance;
+        }
+
         public void Reset()
         {
             Target = Vector3.Zero;

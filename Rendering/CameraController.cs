@@ -70,7 +70,11 @@ namespace MeshViewer3D.Rendering
 
             if (_rightDragging)
             {
-                _cam.Pan(dx, dy);
+                if (_cam.FreeCameraMode)
+                    // Free cam: right drag = look around (FPS-style, eye stays fixed)
+                    _cam.FreeLook(dx * OrbitSensitivity, dy * OrbitSensitivity);
+                else
+                    _cam.Pan(dx, dy);
                 return true;
             }
 
