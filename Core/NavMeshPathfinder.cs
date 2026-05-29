@@ -435,9 +435,22 @@ namespace MeshViewer3D.Core
         /// <summary>
         /// Returns the shared edge between two adjacent polygons as (left, right) endpoints.
         /// Left/right is determined by winding order of polyA.
+        /// Matches first by vertex index (fast, always correct for same-tile polys),
+        /// then by world position (fallback for cross-tile polys that share boundary positions
+        /// but have different vertex indices after NavMeshData.Merge).
         /// </summary>
         private static (Vector3 left, Vector3 right)? GetSharedEdge(NavMeshData mesh, int polyA, int polyB)
         {
+            const float epsXZ   = 0.1f;
+            const float epsXZSq = epsXZ * epsXZ;
+            const float epsY    = 3.0f;
+
+            bool PosMatch(Vector3 a, Vector3 b)
+            {
+                float dx = a.X - b.X, dz = a.Z - b.Z;
+                return dx * dx + dz * dz < epsXZSq && MathF.Abs(a.Y - b.Y) <= epsY;
+            }
+
             var pA = mesh.Polys[polyA];
             var pB = mesh.Polys[polyB];
 
@@ -446,6 +459,8 @@ namespace MeshViewer3D.Core
                 int ea2 = (ea + 1) % pA.VertCount;
                 ushort va0 = pA.Verts[ea];
                 ushort va1 = pA.Verts[ea2];
+                var posA0 = mesh.Vertices[va0];
+                var posA1 = mesh.Vertices[va1];
 
                 for (int eb = 0; eb < pB.VertCount; eb++)
                 {
@@ -453,11 +468,16 @@ namespace MeshViewer3D.Core
                     ushort vb0 = pB.Verts[eb];
                     ushort vb1 = pB.Verts[eb2];
 
+                    // Fast path: exact index match (same-tile polys always share vertex indices)
                     if ((va0 == vb0 && va1 == vb1) || (va0 == vb1 && va1 == vb0))
-                    {
-                        // Return in polyA winding order: va0=left, va1=right
-                        return (mesh.Vertices[va0], mesh.Vertices[va1]);
-                    }
+                        return (posA0, posA1);
+
+                    // Position fallback: cross-tile polys share boundary positions but not indices
+                    var posB0 = mesh.Vertices[vb0];
+                    var posB1 = mesh.Vertices[vb1];
+                    if ((PosMatch(posA0, posB0) && PosMatch(posA1, posB1)) ||
+                        (PosMatch(posA0, posB1) && PosMatch(posA1, posB0)))
+                        return (posA0, posA1);
                 }
             }
 
