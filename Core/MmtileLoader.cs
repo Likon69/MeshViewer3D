@@ -14,10 +14,19 @@ namespace MeshViewer3D.Core
     /// </summary>
     public class MmtileLoader
     {
+        public static Action<string>? LogSink { get; set; }
+
         // Magic numbers (little-endian format comme lu par BinaryReader)
         public const uint MMAP_MAGIC = 0x4D4D4150;      // "MMAP" en little-endian (bytes: 50 41 4D 4D)
         public const uint DETOUR_MAGIC_DNAV = 0x444E4156; // "DNAV" en little-endian (bytes: 56 41 4E 44)
         public const uint DETOUR_MAGIC_VAND = 0x5641564E; // "VAND" en little-endian (bytes: 4E 56 41 56)
+        public const uint MMAP_MULTI_TILE_VERSION = 5;
+
+        private static void Log(string message)
+        {
+            Console.WriteLine(message);
+            LogSink?.Invoke(message);
+        }
         
         /// <summary>
         /// Charge une tile navmesh depuis un fichier .mmtile
@@ -40,17 +49,25 @@ namespace MeshViewer3D.Core
             
             if (firstInt == MMAP_MAGIC)
             {
-                // Header MMAP Trinity: 20 bytes total
-                // Offset 0-3: magic "MMAP" (déjà lu)
-                // Offset 4-7: version
-                // Offset 8-11: tileX
-                // Offset 12-15: tileY  
-                // Offset 16-19: dataSize
-                br.ReadUInt32(); // version
-                br.ReadUInt32(); // tileX
-                br.ReadUInt32(); // tileY
-                br.ReadUInt32(); // dataSize
-                // Stream est maintenant à offset 20, début du dtMeshHeader
+                // Header MMAP Trinity (20 bytes)
+                // Common layout:
+                // Offset 0-3:  magic "MMAP"
+                // Offset 4-7:  dtNavMesh version
+                // Offset 8-11: mmap version (v4 single-tile, v5 multi-tile)
+                // Offset 12-15: payload size OR sub-tile count (v5)
+                // Offset 16-19: flags (usesLiquids...)
+                uint dtVersion = br.ReadUInt32();
+                uint mmapVersion = br.ReadUInt32();
+                uint payloadOrCount = br.ReadUInt32();
+                br.ReadUInt32(); // flags
+
+                // New 4x4 format: payload = [u32 blobSize + blob]*count
+                if (mmapVersion == MMAP_MULTI_TILE_VERSION)
+                {
+                    return LoadMultiTilePayload(br, filePath, mapId, tileX, tileY, payloadOrCount, dtVersion);
+                }
+
+                // v4 and legacy variants: stream is now at dtMeshHeader start.
             }
             else
             {
@@ -58,16 +75,109 @@ namespace MeshViewer3D.Core
                 fs.Position = 0;
             }
             
-            // Lire dtMeshHeader (96 bytes)
+            return ReadSingleDetourTile(br, filePath, mapId, tileX, tileY);
+        }
+
+        private static NavMeshData LoadMultiTilePayload(
+            BinaryReader br,
+            string filePath,
+            int mapId,
+            int fileTileX,
+            int fileTileY,
+            uint expectedCount,
+            uint dtVersion)
+        {
+            var subTiles = new List<NavMeshData>();
+
+            if (dtVersion != 7)
+                Log($"Warning: MMAP header reports dtVersion={dtVersion}, expected 7");
+
+            Log($"[MMAP] Loading multi-tile file: {Path.GetFileName(filePath)}");
+            Log($"[MMAP] File tile (from filename): ({fileTileX},{fileTileY}) | expected sub-tiles: {expectedCount}");
+
+            int internalHeaderCount = 0;
+            int internalHeaderZeroCoordsCount = 0;
+
+            for (uint i = 0; i < expectedCount && br.BaseStream.Position < br.BaseStream.Length; i++)
+            {
+                if (br.BaseStream.Length - br.BaseStream.Position < sizeof(uint))
+                    break;
+
+                uint blobSize = br.ReadUInt32();
+                if (blobSize == 0)
+                    continue;
+
+                if (blobSize > br.BaseStream.Length - br.BaseStream.Position)
+                    throw new InvalidDataException(
+                        $"Invalid sub-tile blob size {blobSize} at index {i}: exceeds remaining bytes");
+
+                byte[] blob = br.ReadBytes((int)blobSize);
+                using var blobStream = new MemoryStream(blob, writable: false);
+                using var blobReader = new BinaryReader(blobStream);
+                var subTile = ReadSingleDetourTile(
+                    blobReader,
+                    $"{filePath}#sub{i}",
+                    mapId,
+                    fileTileX,
+                    fileTileY);
+
+                internalHeaderCount++;
+                if (subTile.Header.TileX == 0 && subTile.Header.TileY == 0)
+                    internalHeaderZeroCoordsCount++;
+
+                var h = subTile.Header;
+                Log(
+                    $"[MMAP][sub {i:00}] size={blobSize} hdrTile=({h.TileX},{h.TileY}) polys={h.PolyCount} verts={h.VertCount} " +
+                    $"bmin=({h.BMin.X:F1},{h.BMin.Y:F1},{h.BMin.Z:F1}) bmax=({h.BMax.X:F1},{h.BMax.Y:F1},{h.BMax.Z:F1})");
+
+                // Diagnostic: compute actual vertex Y range (height) to detect coordinate swap bugs
+                if (subTile.Vertices.Length > 0)
+                {
+                    float vYmin = subTile.Vertices[0].Y, vYmax = subTile.Vertices[0].Y;
+                    float vXmin = subTile.Vertices[0].X, vXmax = subTile.Vertices[0].X;
+                    float vZmin = subTile.Vertices[0].Z, vZmax = subTile.Vertices[0].Z;
+                    foreach (var v in subTile.Vertices)
+                    {
+                        if (v.Y < vYmin) vYmin = v.Y; if (v.Y > vYmax) vYmax = v.Y;
+                        if (v.X < vXmin) vXmin = v.X; if (v.X > vXmax) vXmax = v.X;
+                        if (v.Z < vZmin) vZmin = v.Z; if (v.Z > vZmax) vZmax = v.Z;
+                    }
+                    Log($"[MMAP][sub {i:00}] actual vertex range: X=[{vXmin:F1},{vXmax:F1}] Y=[{vYmin:F1},{vYmax:F1}] Z=[{vZmin:F1},{vZmax:F1}]");
+                }
+
+                subTiles.Add(subTile);
+            }
+
+            if (internalHeaderCount > 0 && internalHeaderZeroCoordsCount == internalHeaderCount)
+            {
+                Log(
+                    "[MMAP][WARN] All sub-tiles report internal Detour tile coords (0,0). " +
+                    "This is suspicious for 4x4 files and likely indicates a generator-side tile-index issue.");
+            }
+
+            if (subTiles.Count == 0)
+                throw new InvalidDataException($"No valid sub-tiles found in multi-tile file: {filePath}");
+
+            // Merge sub-tiles for viewer rendering (single NavMeshData pipeline).
+            return subTiles.Count == 1 ? subTiles[0] : NavMeshData.Merge(subTiles);
+        }
+
+        private static NavMeshData ReadSingleDetourTile(
+            BinaryReader br,
+            string filePath,
+            int mapId,
+            int tileX,
+            int tileY)
+        {
+            // Lire dtMeshHeader (100 bytes)
             var header = ReadMeshHeader(br);
-            
-            // Valider
+
             if (!header.IsValid())
             {
                 throw new InvalidDataException(
                     $"Invalid Detour magic: 0x{header.Magic:X8}, expected 0x{DETOUR_MAGIC_DNAV:X8} or 0x{DETOUR_MAGIC_VAND:X8}");
             }
-            
+
             // Lire les données dans l'ORDRE EXACT de Detour
             var vertices = ReadVertices(br, header.VertCount);
             var polys = ReadPolys(br, header.PolyCount);
@@ -77,7 +187,7 @@ namespace MeshViewer3D.Core
             var detailTris = ReadDetailTris(br, header.DetailTriCount);
             var bvTree = ReadBVNodes(br, header.BvNodeCount);
             var offMesh = ReadOffMeshConnections(br, header.OffMeshConCount);
-            
+
             // Debug: compter les area types
             var areaCounts = new Dictionary<byte, int>();
             foreach (var poly in polys)
@@ -87,16 +197,15 @@ namespace MeshViewer3D.Core
                     areaCounts[area] = 0;
                 areaCounts[area]++;
             }
-            
-            Console.WriteLine($"\nTile ({tileX},{tileY}) Area distribution:");
+
+            Log($"\nTile ({tileX},{tileY}) Area distribution:");
             foreach (var kvp in areaCounts.OrderBy(x => x.Key))
             {
                 string name = Data.AreaTypeInfo.GetName(kvp.Key);
-                Console.WriteLine($"  Area {kvp.Key} ({name}): {kvp.Value} polys");
+                Log($"  Area {kvp.Key} ({name}): {kvp.Value} polys");
             }
-            
-            // Créer NavMeshData
-            var data = new NavMeshData
+
+            return new NavMeshData
             {
                 FilePath = filePath,
                 MapId = mapId,
@@ -112,8 +221,6 @@ namespace MeshViewer3D.Core
                 BVTree = bvTree,
                 OffMeshConnections = offMesh
             };
-            
-            return data;
         }
 
         /// <summary>
