@@ -243,9 +243,14 @@ namespace MeshViewer3D.Core
             var mergedPolys = new List<NavPoly>();
             var mergedOffMesh = new List<OffMeshConnection>();
 
-            // Track which edges were external (for cross-tile reconnection)
-            // Key: merged poly index, Value: list of edge indices that were external
-            var externalEdges = new List<(int polyIdx, int edgeIdx)>();
+            // Track which edges were external (for cross-tile reconnection).
+            // externalEdges: edges that were 0x8000 portal flags (zeroed, then reconnected or restored to 0x8001).
+            // borderCandidates: edges that were Neis=0 (mini-tile/sub-tile/ADT boundary faces with no portal flag).
+            //   These also need reconnection: Recast only sets 0x8000 portal flags at quantized X=0 or X=w
+            //   (the outermost heightfield boundary). Interior mini-tile boundary edges — at e.g. X=85 in a
+            //   90-cell tile — become Neis=0 in the Detour tile. They must be reconnected by position matching.
+            var externalEdges    = new List<(int polyIdx, int edgeIdx)>(); // was 0x8000, may restore to 0x8001
+            var borderCandidates = new List<(int polyIdx, int edgeIdx)>(); // was 0x0000, stay 0 if unmatched
 
             // Compute merged bounding box
             var bmin = list[0].Header.BMin;
@@ -283,6 +288,11 @@ namespace MeshViewer3D.Core
                             newPoly.Neis[i] = 0; // zero for now — will reconnect below
                             externalEdges.Add((mergedPolyIdx, i));
                         }
+                        else // nei == 0: boundary edge without portal flag (mini-tile or sub-tile boundary)
+                        {
+                            // Do NOT zero — already 0. Just register as reconnection candidate.
+                            borderCandidates.Add((mergedPolyIdx, i));
+                        }
                     }
                     mergedPolys.Add(newPoly);
                 }
@@ -299,14 +309,28 @@ namespace MeshViewer3D.Core
                 if (h.BMax.Z > bmax.Z) bmax.Z = h.BMax.Z;
             }
 
-            // Convert to array for mutation
+            // Convert to arrays for mutation
             var polysArray = mergedPolys.ToArray();
             var vertsArray = mergedVerts.ToArray();
 
-            // Cross-tile reconnection: for each external edge, find a matching polygon
-            // sharing the same two border vertex positions in another tile.
-            if (externalEdges.Count > 0)
-                ReconnectCrossTileEdges(polysArray, vertsArray, externalEdges);
+            // Cross-tile reconnection: match portal edges (0x8000) AND border edges (0x0000) by world position.
+            // Combine both lists — the matching algorithm works on world-space vertex positions,
+            // so the distinction only matters for the post-match restoration step.
+            var allEdgeCandidates = new List<(int polyIdx, int edgeIdx)>(externalEdges.Count + borderCandidates.Count);
+            allEdgeCandidates.AddRange(externalEdges);
+            allEdgeCandidates.AddRange(borderCandidates);
+
+            if (allEdgeCandidates.Count > 0)
+                ReconnectCrossTileEdges(polysArray, vertsArray, allEdgeCandidates);
+
+            // Restore unmatched PORTAL edges (originally 0x8000) to 0x8001 so that a parent-level Merge()
+            // can pick them up and attempt cross-file reconnection.
+            // Border edges (originally 0x0000) that are unmatched stay at 0 — they are genuine outer boundaries.
+            foreach (var (polyIdx, edgeIdx) in externalEdges)
+            {
+                if (polysArray[polyIdx].Neis[edgeIdx] == 0)
+                    polysArray[polyIdx].Neis[edgeIdx] = 0x8001;
+            }
 
             var mergedHeader = list[0].Header;
             mergedHeader.BMin = bmin;
@@ -337,12 +361,22 @@ namespace MeshViewer3D.Core
         /// Reconnects external cross-tile edges after merge by matching border vertex positions.
         /// For each edge that was an external link (Neis >= 0x8000, now zeroed), find another polygon
         /// that has an edge with matching vertex positions (within epsilon) and set them as neighbors.
+        /// Uses separate XZ and Y tolerances: adjacent tiles built independently can have slightly
+        /// different heights at the seam (up to one heightfield cell height ≈ walkableClimb).
         /// </summary>
         private static void ReconnectCrossTileEdges(NavPoly[] polys, Vector3[] verts,
             List<(int polyIdx, int edgeIdx)> externalEdges)
         {
-            const float epsilon = 0.01f;
-            const float epsSq = epsilon * epsilon;
+            const float epsXZ   = 0.05f;         // XZ: 5 cm — covers heightfield quantization noise
+            const float epsXZSq = epsXZ * epsXZ;
+            const float epsY    = 3.0f;          // Y: 3 WoW units — covers walkableClimb across tile seams
+
+            // XZ position match with lenient Y tolerance (mirrors Detour's connectExtLinks logic)
+            bool VM(Vector3 a, Vector3 b)
+            {
+                float dx = a.X - b.X, dz = a.Z - b.Z;
+                return dx * dx + dz * dz < epsXZSq && MathF.Abs(a.Y - b.Y) <= epsY;
+            }
 
             // Build spatial index: for each external edge, store its two vertex positions
             // Then match pairs with coincident vertices
@@ -370,15 +404,15 @@ namespace MeshViewer3D.Core
                 {
                     var (piB, eiB, v0b, v1b) = edgeList[j];
 
-                    // Early exit: if v0b.X is too far from both v0a.X and v1a.X, stop
-                    if (v0b.X - MathF.Max(v0a.X, v1a.X) > epsilon) break;
+                    // Early exit: if v0b.X is too far from edge A's X range, no match possible
+                    if (v0b.X - MathF.Max(v0a.X, v1a.X) > epsXZ) break;
 
                     if (piA == piB) continue; // Same polygon
                     if (polys[piB].Neis[eiB] != 0) continue; // Already reconnected
 
-                    // Check if edges match: (v0a≈v0b && v1a≈v1b) || (v0a≈v1b && v1a≈v0b)
-                    bool matchDirect = (v0a - v0b).LengthSquared < epsSq && (v1a - v1b).LengthSquared < epsSq;
-                    bool matchFlipped = (v0a - v1b).LengthSquared < epsSq && (v1a - v0b).LengthSquared < epsSq;
+                    // Check if edges match using XZ position + Y-tolerant height comparison
+                    bool matchDirect  = VM(v0a, v0b) && VM(v1a, v1b);
+                    bool matchFlipped = VM(v0a, v1b) && VM(v1a, v0b);
 
                     if (matchDirect || matchFlipped)
                     {
