@@ -128,7 +128,7 @@ namespace MeshViewer3D.UI
         {
             this.KeyDown += MainForm_KeyDown;
             this.KeyUp += MainForm_KeyUp;
-            this.Deactivate += (_, _) => _pressedKeys.Clear();
+            this.Deactivate += (_, _) => { _pressedKeys.Clear(); _cameraController?.DeactivateFreeLook(); };
         }
 
         private void MainForm_KeyUp(object? sender, KeyEventArgs e)
@@ -663,6 +663,8 @@ namespace MeshViewer3D.UI
             _glControl.MouseMove += GlControl_MouseMove;
             _glControl.MouseUp += GlControl_MouseUp;
             _glControl.MouseWheel += GlControl_MouseWheel;
+            _glControl.MouseEnter += GlControl_MouseEnter;
+            _glControl.MouseLeave += GlControl_MouseLeave;
 
             // ── Layout with resizable SplitContainers ─────────────────────────
             // splitViewport: top = GLControl, bottom = Console (horizontal splitter)
@@ -773,7 +775,11 @@ namespace MeshViewer3D.UI
             {
                 Interval = 16  // ~60 FPS
             };
-            _renderTimer.Tick += (s, e) => _glControl?.Invalidate();
+            _renderTimer.Tick += (s, e) =>
+            {
+                if (_glControl != null && _glControl.IsHandleCreated && !_glControl.IsDisposed)
+                    _glControl.Invalidate();
+            };
             _renderTimer.Start();
 
             // Focus camera default
@@ -786,7 +792,8 @@ namespace MeshViewer3D.UI
             _cameraController = new CameraController(
                 _camera,
                 (screenX, screenY) => RaycastNavMeshPoint(screenX, screenY),
-                () => GetCurrentSceneBounds());
+                () => GetCurrentSceneBounds(),
+                _glControl);
         }
 
         private (Vector3 bMin, Vector3 bMax)? GetCurrentSceneBounds()
@@ -887,7 +894,11 @@ namespace MeshViewer3D.UI
         {
             if (_glControl == null || _renderer == null) return;
 
-            _glControl.MakeCurrent();
+            if (!_glControl.IsHandleCreated || _glControl.IsDisposed)
+                return;
+
+            try { _glControl.MakeCurrent(); }
+            catch (OpenTK.Windowing.GraphicsLibraryFramework.GLFWException) { return; }
 
             // Calculer FPS
             var now = DateTime.Now;
@@ -909,7 +920,11 @@ namespace MeshViewer3D.UI
 
         private void GlControl_Resize(object? sender, EventArgs e)
         {
-            if (_glControl == null) return;
+            if (_glControl == null || !_glControl.IsHandleCreated || _glControl.IsDisposed) return;
+
+            try { _glControl.MakeCurrent(); }
+            catch (OpenTK.Windowing.GraphicsLibraryFramework.GLFWException) { return; }
+
             GL.Viewport(0, 0, _glControl.Width, _glControl.Height);
         }
 
@@ -1057,6 +1072,18 @@ namespace MeshViewer3D.UI
                 _cameraController.OnMouseWheel(e);
             else
                 _camera.Zoom(e.Delta);
+        }
+
+        private void GlControl_MouseEnter(object? sender, EventArgs e)
+        {
+            if (_camera.FreeCameraMode)
+                _cameraController?.ActivateFreeLook();
+        }
+
+        private void GlControl_MouseLeave(object? sender, EventArgs e)
+        {
+            if (_camera.FreeCameraMode)
+                _cameraController?.DeactivateFreeLook();
         }
 
         // Menu handlers
@@ -1608,8 +1635,16 @@ namespace MeshViewer3D.UI
             if (_freeCameraMenuItem != null)
                 _freeCameraMenuItem.Checked = _camera.FreeCameraMode;
 
-            if (!_camera.FreeCameraMode)
+            if (_camera.FreeCameraMode)
+            {
+                _cameraController?.ActivateFreeLook();
+                _glControl?.Focus();
+            }
+            else
+            {
+                _cameraController?.DeactivateFreeLook();
                 _pressedKeys.Clear();
+            }
 
             _console?.Log($"Free camera: {(_camera.FreeCameraMode ? "ON" : "OFF")}");
         }

@@ -14,6 +14,7 @@ namespace MeshViewer3D.Rendering
         private readonly Camera _cam;
         private readonly Func<int, int, Vector3?> _raycast;
         private readonly Func<(Vector3 bMin, Vector3 bMax)?> _getSceneBounds;
+        private readonly Control? _viewport;
 
         private bool _middleDragging;
         private bool _rightDragging;
@@ -21,16 +22,46 @@ namespace MeshViewer3D.Rendering
         private bool _ctrlAtDragStart;
         private Point _lastMouse;
 
-        public float OrbitSensitivity = 0.005f; // radians per pixel
+        // Free camera: pointer-lock state
+        private bool _freeLookActive;
+
+        public float OrbitSensitivity = 0.005f;   // radians per pixel
+        public float FreeLookSensitivity = 0.0015f;
 
         public CameraController(
             Camera camera,
             Func<int, int, Vector3?> raycastFunc,
-            Func<(Vector3 bMin, Vector3 bMax)?> getSceneBounds)
+            Func<(Vector3 bMin, Vector3 bMax)?> getSceneBounds,
+            Control? viewport = null)
         {
             _cam = camera;
             _raycast = raycastFunc;
             _getSceneBounds = getSceneBounds;
+            _viewport = viewport;
+        }
+
+        /// <summary>
+        /// Active le pointer-lock pour le mode free cam (souris capturee, curseur caché).
+        /// </summary>
+        public void ActivateFreeLook()
+        {
+            if (_freeLookActive || _viewport == null) return;
+
+            _freeLookActive = true;
+            _viewport.Cursor = Cursors.NoMove2D;
+            CenterCursor();
+        }
+
+        /// <summary>
+        /// Désactive le pointer-lock du mode free cam.
+        /// </summary>
+        public void DeactivateFreeLook()
+        {
+            if (!_freeLookActive) return;
+
+            _freeLookActive = false;
+            if (_viewport != null)
+                _viewport.Cursor = Cursors.Default;
         }
 
         public bool OnMouseDown(MouseEventArgs e, Keys modifiers)
@@ -61,20 +92,35 @@ namespace MeshViewer3D.Rendering
 
         public bool OnMouseMove(MouseEventArgs e, Keys modifiers)
         {
+            // Free camera: pointer-lock — le mouvement de la souris tourne la vue directement
+            if (_freeLookActive && _cam.FreeCameraMode)
+            {
+                var center = new Point(_viewport!.Width / 2, _viewport.Height / 2);
+                int dx = e.X - center.X;
+                int dy = e.Y - center.Y;
+
+                if (dx != 0 || dy != 0)
+                {
+                    _cam.FreeLook(dx * FreeLookSensitivity, dy * FreeLookSensitivity);
+                    CenterCursor();
+                }
+
+                return true;
+            }
+
             if (!_middleDragging && !_rightDragging)
                 return false;
 
-            float dx = e.X - _lastMouse.X;
-            float dy = e.Y - _lastMouse.Y;
+            float dragDx = e.X - _lastMouse.X;
+            float dragDy = e.Y - _lastMouse.Y;
             _lastMouse = e.Location;
 
             if (_rightDragging)
             {
                 if (_cam.FreeCameraMode)
-                    // Free cam: right drag = look around (FPS-style, eye stays fixed)
-                    _cam.FreeLook(dx * OrbitSensitivity, dy * OrbitSensitivity);
+                    _cam.FreeLook(dragDx * OrbitSensitivity, dragDy * OrbitSensitivity);
                 else
-                    _cam.Pan(dx, dy);
+                    _cam.Pan(dragDx, dragDy);
                 return true;
             }
 
@@ -83,15 +129,15 @@ namespace MeshViewer3D.Rendering
 
             if (zooming)
             {
-                _cam.Zoom(-dy * 0.03f);
+                _cam.Zoom(-dragDy * 0.03f);
             }
             else if (panning)
             {
-                _cam.Pan(dx, dy);
+                _cam.Pan(dragDx, dragDy);
             }
             else
             {
-                _cam.Orbit(dx * OrbitSensitivity, dy * OrbitSensitivity);
+                _cam.Orbit(dragDx * OrbitSensitivity, dragDy * OrbitSensitivity);
             }
 
             return true;
@@ -170,5 +216,12 @@ namespace MeshViewer3D.Rendering
         }
 
         public bool IsDragging => _middleDragging || _rightDragging;
+
+        private void CenterCursor()
+        {
+            if (_viewport == null) return;
+            var center = _viewport.PointToScreen(new Point(_viewport.Width / 2, _viewport.Height / 2));
+            Cursor.Position = center;
+        }
     }
 }

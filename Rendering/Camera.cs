@@ -26,8 +26,10 @@ namespace MeshViewer3D.Rendering
         public float PrecisionMultiplier { get; set; } = 0.25f;
 
         private const float MaxPitch = MathHelper.PiOver2 - 0.01f;
-        private const float MinDist = 1f;
-        private const float StepFactor = 0.12f;
+        private const float OrbitMinDist = 1f;
+        private const float FreeMinDist = 0.01f;
+        private const float OrbitStepFactor = 0.10f;
+        private const float FreeStepFactor = 0.06f;
 
         public Vector3 Forward
         {
@@ -81,6 +83,9 @@ namespace MeshViewer3D.Rendering
             Target += Up * (deltaScreenY * speed);
         }
 
+        private float MinDist => FreeCameraMode ? FreeMinDist : OrbitMinDist;
+        private float StepFactor => FreeCameraMode ? FreeStepFactor : OrbitStepFactor;
+
         public void ZoomTowardPoint(Vector3 hitPoint, float steps)
         {
             float normalizedSteps = MathF.Abs(steps) > 10f ? steps / 120f : steps;
@@ -109,7 +114,7 @@ namespace MeshViewer3D.Rendering
             if (FreeCameraMode)
             {
                 float direction = normalizedSteps > 0f ? 1f : -1f;
-                float dollyStep = MathF.Max(0.5f, Distance * 0.08f) * MathF.Abs(normalizedSteps);
+                float dollyStep = MathF.Max(0.5f, Distance * FreeStepFactor) * MathF.Abs(normalizedSteps);
                 Target += Forward * (direction * dollyStep);
                 return;
             }
