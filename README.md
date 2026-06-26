@@ -12,6 +12,10 @@ MeshViewer3D opens Detour/Recast `.mmtile` navigation tiles and lets you view an
 
 On the editing side you get the full Honorbuddy pipeline: blackspots, jump links, and convex volumes, all saving to the same XML formats that HB reads. Pathfinding (A\* + Funnel) runs live in the tool so you can verify connectivity before committing changes.
 
+This tool is part of the CopilotBuddy ecosystem. The navmesh tiles it displays are produced by the `extractor-csharp` repository and consumed at runtime by the `Navigation C++` wrapper. Preview images were provided by a community member.
+
+=> **[Discord](https://discord.com/invite/ep5TcGMCcB)** <=
+
 ---
 
 ## Requirements
@@ -32,8 +36,8 @@ cd MeshViewer3D
 dotnet run
 ```
 
-1. **Map → Load Tile** for a single `.mmtile`, or **Load Folder** to bring in a whole area at once. The tool merges tiles automatically and warns you if the vertex limit is reached.
-2. To see buildings and terrain, go to **Map → Set WoW Data Folder** and point it at your 3.3.5a `Data/` folder. The path is remembered across sessions.
+1. **Map > Load Tile** for a single `.mmtile`, or **Load Folder** to bring in a whole area at once. The tool merges tiles automatically and warns you if the vertex limit is reached.
+2. To see buildings and terrain, go to **Map > Set WoW Data Folder** and point it at your 3.3.5a `Data/` folder. The path is remembered across sessions.
 3. Camera works like Blender — middle mouse to orbit, `Shift+MMB` or right mouse to pan, scroll to zoom toward the cursor.
 4. Use the **Raytrace** and **Test Nav** toolbar buttons to inspect the mesh and verify pathfinding.
 5. Press **B**, **J**, or **V** to enter an edit mode. **Ctrl+S** saves.
