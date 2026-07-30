@@ -32,6 +32,7 @@ namespace MeshViewer3D.Rendering
         private ShaderProgram? _lineShader;
         private ShaderProgram? _coloredLineShader;
         private ShaderProgram? _terrainShader;
+        private ShaderProgram? _instancedShader;
 
         // Buffers navmesh — one per tile for distance culling. Replaces the old single-VAO layout
         // that forced every tile to draw every frame regardless of camera position.
@@ -118,11 +119,15 @@ namespace MeshViewer3D.Rendering
 
         // WMO World Object renderers (one per MODF placement)
         private readonly List<WmoRenderer> _wmoRenderers = new();
+        // WMO instanced renderers (one per unique rootPath that has multiple placements)
+        private readonly List<WmoInstancedRenderer> _wmoInstancedRenderers = new();
         private bool _showWmoObjects = true;
         private HashSet<string> _wmoBlacklist = new(StringComparer.OrdinalIgnoreCase);
 
         // M2 doodad renderers (one per MDDF placement)
         private readonly List<M2Renderer> _m2Renderers = new();
+        // M2 instanced renderers (one per unique M2 filename that has multiple placements)
+        private readonly List<M2InstancedRenderer> _m2InstancedRenderers = new();
         private bool _showM2Objects = true;
 
         // Terrain heightmap renderers (one per ADT tile — 3×3 grid loaded automatically)
@@ -170,6 +175,10 @@ namespace MeshViewer3D.Rendering
             string terrainVert = System.IO.Path.Combine(resourcePath, "terrain.vert");
             string terrainFrag = System.IO.Path.Combine(resourcePath, "terrain.frag");
             _terrainShader = new ShaderProgram(terrainVert, terrainFrag);
+
+            string instancedVert = System.IO.Path.Combine(resourcePath, "mesh_instanced.vert");
+            string instancedFrag = System.IO.Path.Combine(resourcePath, "mesh_instanced.frag");
+            _instancedShader = new ShaderProgram(instancedVert, instancedFrag);
 
             // Configuration OpenGL
             GL.Enable(EnableCap.DepthTest);
@@ -1284,7 +1293,8 @@ namespace MeshViewer3D.Rendering
 
             // Render terrain heightmap (opaque-ish, drawn before WMO/M2)
             // Render WMO world objects (semi-transparent, drawn last for correct blending)
-            if (_showWmoObjects && _wmoRenderers.Count > 0 && _meshShader != null)
+            if (_showWmoObjects && (_wmoRenderers.Count > 0 || _wmoInstancedRenderers.Count > 0)
+                && (_meshShader != null || _instancedShader != null))
             {
                 GL.Enable(EnableCap.Blend);
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
@@ -1295,14 +1305,26 @@ namespace MeshViewer3D.Rendering
                     if (_wmoBlacklist.Count > 0 && _wmoBlacklist.Contains(wmoRenderer.Name))
                         continue;
                     if (!frustum.IntersectsAabb(wmoRenderer.BoundsMin, wmoRenderer.BoundsMax)) continue;
-                    wmoRenderer.Render(view, projection, _meshShader);
+                    wmoRenderer.Render(view, projection, _meshShader!);
+                }
+
+                if (_instancedShader != null)
+                {
+                    foreach (var inst in _wmoInstancedRenderers)
+                    {
+                        if (_wmoBlacklist.Count > 0 && _wmoBlacklist.Contains(inst.Name))
+                            continue;
+                        if (!frustum.IntersectsAabb(inst.BoundsMin, inst.BoundsMax)) continue;
+                        inst.Render(view, projection, _instancedShader);
+                    }
                 }
 
                 GL.DepthMask(true);
             }
 
             // Render M2 doodad objects (semi-transparent, same blending as WMO)
-            if (_showM2Objects && _m2Renderers.Count > 0 && _meshShader != null)
+            if (_showM2Objects && (_m2Renderers.Count > 0 || _m2InstancedRenderers.Count > 0)
+                && (_meshShader != null || _instancedShader != null))
             {
                 GL.Enable(EnableCap.Blend);
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
@@ -1311,7 +1333,16 @@ namespace MeshViewer3D.Rendering
                 foreach (var m2Renderer in _m2Renderers)
                 {
                     if (!frustum.IntersectsAabb(m2Renderer.BoundsMin, m2Renderer.BoundsMax)) continue;
-                    m2Renderer.Render(view, projection, _meshShader);
+                    m2Renderer.Render(view, projection, _meshShader!);
+                }
+
+                if (_instancedShader != null)
+                {
+                    foreach (var inst in _m2InstancedRenderers)
+                    {
+                        if (!frustum.IntersectsAabb(inst.BoundsMin, inst.BoundsMax)) continue;
+                        inst.Render(view, projection, _instancedShader);
+                    }
                 }
 
                 GL.DepthMask(true);
@@ -1660,11 +1691,32 @@ namespace MeshViewer3D.Rendering
                     result.Add(new Core.ObjectGeometry(wmo.Name, tris));
             }
 
+            // Instanced WMOs: one ObjectGeometry entry per placement (count preserved).
+            foreach (var inst in _wmoInstancedRenderers)
+            {
+                if (_wmoBlacklist.Contains(inst.Name)) continue;
+                foreach (var tris in inst.PlacementTriangles)
+                {
+                    if (tris.Length > 0)
+                        result.Add(new Core.ObjectGeometry(inst.Name, tris));
+                }
+            }
+
             foreach (var m2 in _m2Renderers)
             {
                 var tris = m2.GetRecastTriangles();
                 if (tris.Length > 0)
                     result.Add(new Core.ObjectGeometry(m2.Name, tris));
+            }
+
+            // Instanced M2 doodads: one entry per placement (count preserved).
+            foreach (var inst in _m2InstancedRenderers)
+            {
+                foreach (var tris in inst.PlacementTriangles)
+                {
+                    if (tris.Length > 0)
+                        result.Add(new Core.ObjectGeometry(inst.Name, tris));
+                }
             }
 
             return result;
@@ -1683,8 +1735,13 @@ namespace MeshViewer3D.Rendering
             {
                 foreach (var r in _wmoRenderers) r.Dispose();
                 _wmoRenderers.Clear();
+                foreach (var r in _wmoInstancedRenderers) r.Dispose();
+                _wmoInstancedRenderers.Clear();
             }
 
+            // Group MODF instances by rootPath so duplicate WMO models can use the instanced path.
+            var wmoGroups = new Dictionary<string, List<MODF>>(StringComparer.OrdinalIgnoreCase);
+            var wmoFiles  = new Dictionary<string, List<WmoGroup>>(StringComparer.OrdinalIgnoreCase);
             foreach (var modf in adt.WmoInstances)
             {
                 if (modf.mwidEntry >= (uint)adt.WmoNames.Length)
@@ -1692,114 +1749,68 @@ namespace MeshViewer3D.Rendering
                     Console.WriteLine($"  WMO skip: mwidEntry {modf.mwidEntry} >= WmoNames.Length {adt.WmoNames.Length}");
                     continue;
                 }
-
                 string rootPath = adt.WmoNames[modf.mwidEntry];
                 if (string.IsNullOrEmpty(rootPath))
                 {
                     Console.WriteLine($"  WMO skip: empty root path for mwidEntry {modf.mwidEntry}");
                     continue;
                 }
-
-                Console.WriteLine($"  WMO: Loading '{rootPath}' pos=({modf.posX:F1},{modf.posY:F1},{modf.posZ:F1})");
-
-                byte[]? rootBytes = dataProvider.GetFileBytes(rootPath);
-                if (rootBytes == null)
+                if (!wmoGroups.TryGetValue(rootPath, out var modfList))
                 {
-                    Console.WriteLine($"  WMO FAIL: root file not found in MPQ: {rootPath}");
-                    continue;
+                    modfList = new List<MODF>();
+                    wmoGroups[rootPath] = modfList;
                 }
+                modfList.Add(modf);
 
-                WmoFile wmoFile;
-                try { wmoFile = new WmoFile(rootBytes); }
-                catch (Exception ex)
+                if (!wmoFiles.ContainsKey(rootPath))
                 {
-                    Console.WriteLine($"  WMO FAIL: root parse error: {ex.Message}");
-                    continue;
+                    var (parsedFile, parsedGroups) = ParseWmoFile(dataProvider, rootPath);
+                    if (parsedGroups != null) wmoFiles[rootPath] = parsedGroups;
                 }
-
-                Console.WriteLine($"  WMO: root parsed OK, GroupCount={wmoFile.GroupCount}");
-
-                var groups = new List<WmoGroup>();
-                for (int g = 0; g < wmoFile.GroupCount; g++)
-                {
-                    string groupPath = WmoFile.GetGroupFilePath(rootPath, g);
-                    byte[]? groupBytes = dataProvider.GetFileBytes(groupPath);
-                    if (groupBytes == null)
-                    {
-                        Console.WriteLine($"  WMO FAIL: group {g} not found: {groupPath}");
-                        continue;
-                    }
-                    try
-                    {
-                        var grp = new WmoGroup(groupBytes);
-                        if (grp.IsValid)
-                        {
-                            groups.Add(grp);
-                            Console.WriteLine($"  WMO: group {g} OK — {grp.Geometry.VertexCount} verts, {grp.Geometry.CollisionTriangleCount} col tris, {grp.Geometry.RenderTriangleCount} ren tris");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"  WMO: group {g} invalid (no geometry)");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"  WMO FAIL: group {g} parse error: {ex.Message}");
-                    }
-                }
-
-                if (groups.Count == 0)
-                {
-                    Console.WriteLine($"  WMO skip: 0 valid groups loaded");
-                    continue;
-                }
-
-                var renderer = new WmoRenderer();
-                renderer.Name = Path.GetFileName(rootPath) ?? rootPath;
-                renderer.LoadGeometry(groups, modf, useDirectWowPlacement: false);
-
-                if (meshCenter.HasValue && TryComputeCenter(renderer.GetRecastTriangles(), out var legacyCenter))
-                {
-                    float legacyDist = (legacyCenter - meshCenter.Value).Length;
-                    if (legacyDist > placementSwitchThreshold)
-                    {
-                        var alt = new WmoRenderer();
-                        alt.Name = renderer.Name;
-                        alt.LoadGeometry(groups, modf, useDirectWowPlacement: true);
-
-                        if (TryComputeCenter(alt.GetRecastTriangles(), out var directCenter))
-                        {
-                            float directDist = (directCenter - meshCenter.Value).Length;
-                            if (directDist + 100f < legacyDist)
-                            {
-                                renderer.Dispose();
-                                renderer = alt;
-                                Console.WriteLine($"  WMO placement switch -> direct mode (legacyDist={legacyDist:F1}, directDist={directDist:F1}): {rootPath}");
-                            }
-                            else
-                            {
-                                alt.Dispose();
-                            }
-                        }
-                        else
-                        {
-                            alt.Dispose();
-                        }
-                    }
-                }
-
-                _wmoRenderers.Add(renderer);
-                Console.WriteLine($"  WMO OK: '{rootPath}' — {groups.Count} groups loaded, renderer added");
             }
-            Console.WriteLine($"  WMO TOTAL: {_wmoRenderers.Count} renderers created");
+
+            foreach (var kv in wmoGroups)
+            {
+                string rootPath = kv.Key;
+                var modfs = kv.Value;
+
+                if (!wmoFiles.TryGetValue(rootPath, out var groups) || groups.Count == 0)
+                {
+                    Console.WriteLine($"  WMO skip: '{rootPath}' — 0 valid groups loaded");
+                    continue;
+                }
+
+                if (modfs.Count == 1)
+                {
+                    // Single occurrence: keep existing per-instance path (with legacy/direct switch).
+                    LoadSingleWmoInstance(rootPath, modfs[0], groups, meshCenter, placementSwitchThreshold);
+                }
+                else
+                {
+                    // Multiple occurrences of the same WMO: instanced path.
+                    var inst = new WmoInstancedRenderer
+                    {
+                        Name = Path.GetFileName(rootPath) ?? rootPath
+                    };
+                    inst.LoadGeometry(groups, modfs);
+                    _wmoInstancedRenderers.Add(inst);
+                    Console.WriteLine($"  WMO instanced: '{rootPath}' — {modfs.Count} placements in 1 renderer");
+                }
+            }
+            Console.WriteLine($"  WMO TOTAL: {_wmoRenderers.Count} single + {_wmoInstancedRenderers.Count} instanced");
 
             // ── M2 doodad loading ──────────────────────────────────────────
             if (clearExisting)
             {
                 foreach (var r in _m2Renderers) r.Dispose();
                 _m2Renderers.Clear();
+                foreach (var r in _m2InstancedRenderers) r.Dispose();
+                _m2InstancedRenderers.Clear();
             }
 
+            // Group MDDF instances by M2 file path so duplicate M2 models can use the instanced path.
+            var m2Groups = new Dictionary<string, List<MDDF>>(StringComparer.OrdinalIgnoreCase);
+            var m2Files  = new Dictionary<string, M2File>(StringComparer.OrdinalIgnoreCase);
             foreach (var mddf in adt.M2Instances)
             {
                 if (mddf.mmidEntry >= (uint)adt.M2Names.Length)
@@ -1822,69 +1833,108 @@ namespace MeshViewer3D.Rendering
                     m2Path = m2Path[..^2] + "2";
                 }
 
-                Console.WriteLine($"  M2: Loading '{m2Path}' pos=({mddf.posX:F1},{mddf.posY:F1},{mddf.posZ:F1}) scale={mddf.scale}");
-
-                byte[]? m2Bytes = dataProvider.GetFileBytes(m2Path);
-                if (m2Bytes == null)
+                if (!m2Groups.TryGetValue(m2Path, out var mddfList))
                 {
-                    Console.WriteLine($"  M2 FAIL: file not found in MPQ: {m2Path}");
-                    continue;
+                    mddfList = new List<MDDF>();
+                    m2Groups[m2Path] = mddfList;
                 }
+                mddfList.Add(mddf);
 
-                M2File m2File;
-                try { m2File = M2File.Load(m2Bytes); }
-                catch (Exception ex)
+                if (!m2Files.ContainsKey(m2Path))
                 {
-                    Console.WriteLine($"  M2 FAIL: parse error: {ex.Message}");
-                    continue;
-                }
-
-                if (!m2File.IsValid)
-                {
-                    Console.WriteLine($"  M2 skip: no valid bounding geometry in '{m2Path}'");
-                    continue;
-                }
-
-                Console.WriteLine($"  M2: parsed OK — {m2File.VertexCount} bounding verts, {m2File.TriangleCount} bounding tris");
-
-                var renderer = new M2Renderer();
-                renderer.Name = Path.GetFileName(m2Path) ?? m2Path;
-                renderer.LoadGeometry(m2File, mddf, useDirectWowPlacement: false);
-
-                if (meshCenter.HasValue && TryComputeCenter(renderer.GetRecastTriangles(), out var legacyCenter))
-                {
-                    float legacyDist = (legacyCenter - meshCenter.Value).Length;
-                    if (legacyDist > placementSwitchThreshold)
+                    Console.WriteLine($"  M2: Loading '{m2Path}'");
+                    byte[]? m2Bytes = dataProvider.GetFileBytes(m2Path);
+                    if (m2Bytes == null)
                     {
-                        var alt = new M2Renderer();
-                        alt.Name = renderer.Name;
-                        alt.LoadGeometry(m2File, mddf, useDirectWowPlacement: true);
-
-                        if (TryComputeCenter(alt.GetRecastTriangles(), out var directCenter))
+                        Console.WriteLine($"  M2 FAIL: file not found in MPQ: {m2Path}");
+                        continue;
+                    }
+                    try
+                    {
+                        var parsed = M2File.Load(m2Bytes);
+                        if (!parsed.IsValid)
                         {
-                            float directDist = (directCenter - meshCenter.Value).Length;
-                            if (directDist + 100f < legacyDist)
-                            {
-                                renderer.Dispose();
-                                renderer = alt;
-                                Console.WriteLine($"  M2 placement switch -> direct mode (legacyDist={legacyDist:F1}, directDist={directDist:F1}): {m2Path}");
-                            }
-                            else
-                            {
-                                alt.Dispose();
-                            }
+                            Console.WriteLine($"  M2 skip: no valid bounding geometry in '{m2Path}'");
+                            continue;
+                        }
+                        m2Files[m2Path] = parsed;
+                        Console.WriteLine($"  M2: parsed OK — {parsed.VertexCount} bounding verts, {parsed.TriangleCount} bounding tris");
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"  M2 FAIL: parse error: {ex.Message}");
+                    }
+                }
+            }
+
+            foreach (var kv in m2Groups)
+            {
+                string m2Path = kv.Key;
+                var mddfs = kv.Value;
+
+                if (!m2Files.TryGetValue(m2Path, out var m2File) || !m2File.IsValid)
+                    continue;
+
+                if (mddfs.Count == 1)
+                {
+                    // Single occurrence: keep existing per-instance path (with legacy/direct switch).
+                    LoadSingleM2Instance(m2Path, m2File, mddfs[0], meshCenter, placementSwitchThreshold);
+                }
+                else
+                {
+                    // Multiple occurrences of the same M2: instanced path.
+                    var inst = new M2InstancedRenderer
+                    {
+                        Name = Path.GetFileName(m2Path) ?? m2Path
+                    };
+                    inst.LoadGeometry(m2File, mddfs);
+                    _m2InstancedRenderers.Add(inst);
+                    Console.WriteLine($"  M2 instanced: '{m2Path}' — {mddfs.Count} placements in 1 renderer");
+                }
+            }
+            Console.WriteLine($"  M2 TOTAL: {_m2Renderers.Count} single + {_m2InstancedRenderers.Count} instanced");
+        }
+
+        // ── M2 instancing helpers (additive, do not modify M2Renderer) ──────
+        private void LoadSingleM2Instance(string m2Path, M2File m2File, MDDF mddf, Vector3? meshCenter, float placementSwitchThreshold)
+        {
+            Console.WriteLine($"  M2: pos=({mddf.posX:F1},{mddf.posY:F1},{mddf.posZ:F1}) scale={mddf.scale}");
+            var renderer = new M2Renderer();
+            renderer.Name = Path.GetFileName(m2Path) ?? m2Path;
+            renderer.LoadGeometry(m2File, mddf, useDirectWowPlacement: false);
+
+            if (meshCenter.HasValue && TryComputeCenter(renderer.GetRecastTriangles(), out var legacyCenter))
+            {
+                float legacyDist = (legacyCenter - meshCenter.Value).Length;
+                if (legacyDist > placementSwitchThreshold)
+                {
+                    var alt = new M2Renderer();
+                    alt.Name = renderer.Name;
+                    alt.LoadGeometry(m2File, mddf, useDirectWowPlacement: true);
+
+                    if (TryComputeCenter(alt.GetRecastTriangles(), out var directCenter))
+                    {
+                        float directDist = (directCenter - meshCenter.Value).Length;
+                        if (directDist + 100f < legacyDist)
+                        {
+                            renderer.Dispose();
+                            renderer = alt;
+                            Console.WriteLine($"  M2 placement switch -> direct mode (legacyDist={legacyDist:F1}, directDist={directDist:F1}): {m2Path}");
                         }
                         else
                         {
                             alt.Dispose();
                         }
                     }
+                    else
+                    {
+                        alt.Dispose();
+                    }
                 }
-
-                _m2Renderers.Add(renderer);
-                Console.WriteLine($"  M2 OK: '{m2Path}' — renderer added");
             }
-            Console.WriteLine($"  M2 TOTAL: {_m2Renderers.Count} renderers created");
+
+            _m2Renderers.Add(renderer);
+            Console.WriteLine($"  M2 OK (single): '{m2Path}' — renderer added");
         }
 
         private static bool TryComputeCenter(Vector3[] triangles, out Vector3 center)
@@ -1911,7 +1961,9 @@ namespace MeshViewer3D.Rendering
         /// <param name="includeAdjacentTiles">True to include surrounding 8 tiles (3x3), false for center tile only.</param>
         public void LoadTerrain(AdtFile adt, WowDataProvider? provider = null, string? mapDir = null, bool includeAdjacentTiles = false, bool clearExisting = true)
         {
-            // Clear previous terrain renderers when starting a new terrain scene.
+            foreach (var r in _terrainRenderers) r.Dispose();
+            _terrainRenderers.Clear();
+
             if (clearExisting)
             {
                 foreach (var r in _terrainRenderers) r.Dispose();
@@ -1919,49 +1971,47 @@ namespace MeshViewer3D.Rendering
                 _terrainRenderLogged = false;
             }
 
-            Func<string, byte[]?>? fileLoader = provider != null
-                ? (path => provider.GetFileBytes(path))
-                : null;
+            if (provider == null || mapDir == null)
+            {
+                Log("Terrain: no data provider or map directory, skipping");
+                return;
+            }
 
-            // ── Build list of (tileX, tileY, AdtFile?) to render ──────────────
-            // Pre-fill with the central tile which is already parsed.
+            // ── Build list of tiles to load (center + optional 3×3) ───────────
             var tilesToLoad = new List<(int tx, int ty, AdtFile? data)>
             {
                 (adt.TileX, adt.TileY, adt)
             };
 
-            // Add surrounding 8 tiles only when requested.
-            if (includeAdjacentTiles && provider != null && mapDir != null)
+            if (includeAdjacentTiles)
             {
                 for (int dy = -1; dy <= 1; dy++)
                 {
                     for (int dx = -1; dx <= 1; dx++)
                     {
-                        if (dx == 0 && dy == 0) continue; // central tile already added
-
+                        if (dx == 0 && dy == 0) continue;
                         int tx = adt.TileX + dx;
                         int ty = adt.TileY + dy;
                         if (tx < 0 || ty < 0 || tx > 63 || ty > 63) continue;
-
-                        tilesToLoad.Add((tx, ty, null)); // data loaded on demand below
+                        tilesToLoad.Add((tx, ty, null));
                     }
                 }
             }
+
+            Func<string, byte[]?>? fileLoader = path => provider.GetFileBytes(path);
 
             // ── Load and upload each tile ─────────────────────────────────────
             int loadedCount = 0;
             foreach (var (tx, ty, preloaded) in tilesToLoad)
             {
                 AdtFile? tile = preloaded;
-
                 if (tile == null)
                 {
-                    // Adjacent tile — try to fetch from MPQ
+                    string adjPath = $@"World\Maps\{mapDir}\{mapDir}_{tx}_{ty}.adt";
+                    byte[]? adjBytes = provider.GetFileBytes(adjPath);
+                    if (adjBytes == null) continue;
                     try
                     {
-                        string adjPath = $@"World\Maps\{mapDir}\{mapDir}_{tx}_{ty}.adt";
-                        byte[]? adjBytes = provider!.GetFileBytes(adjPath);
-                        if (adjBytes == null) continue;
                         tile = AdtFile.Load(adjBytes);
                         tile.TileX = tx;
                         tile.TileY = ty;
@@ -1969,7 +2019,6 @@ namespace MeshViewer3D.Rendering
                     catch { continue; }
                 }
 
-                // Skip tiles with no heightmap data
                 bool hasTerrain = false;
                 for (int i = 0; i < tile.TerrainChunks.Length; i++)
                     if (tile.TerrainChunks[i] != null) { hasTerrain = true; break; }
@@ -1979,8 +2028,7 @@ namespace MeshViewer3D.Rendering
                 {
                     var renderer = new TerrainRenderer { Name = $"ADT ({tx},{ty})" };
                     var blpWarnings = new List<string>();
-                    renderer.LoadTerrain(tile.TerrainChunks, tile.TextureNames, fileLoader,
-                        w => blpWarnings.Add(w));
+                    renderer.LoadTerrain(tile.TerrainChunks, tile.TextureNames, fileLoader, w => blpWarnings.Add(w));
                     foreach (var w in blpWarnings) LogWarning(w);
                     if (renderer.TotalVerts > 0)
                     {
@@ -2005,6 +2053,95 @@ namespace MeshViewer3D.Rendering
             }
             else
                 Log("Terrain: no MCNK data found in ADT, skipping");
+        }
+
+        // ── WMO instancing helpers (additive, do not modify WmoRenderer) ────
+        private (WmoFile? file, List<WmoGroup>? groups) ParseWmoFile(WowDataProvider provider, string rootPath)
+        {
+            Console.WriteLine($"  WMO: Loading '{rootPath}'");
+            byte[]? rootBytes = provider.GetFileBytes(rootPath);
+            if (rootBytes == null)
+            {
+                Console.WriteLine($"  WMO FAIL: root file not found in MPQ: {rootPath}");
+                return (null, null);
+            }
+            WmoFile wmoFile;
+            try { wmoFile = new WmoFile(rootBytes); }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  WMO FAIL: root parse error: {ex.Message}");
+                return (null, null);
+            }
+            Console.WriteLine($"  WMO: root parsed OK, GroupCount={wmoFile.GroupCount}");
+            var groups = new List<WmoGroup>();
+            for (int g = 0; g < wmoFile.GroupCount; g++)
+            {
+                string groupPath = WmoFile.GetGroupFilePath(rootPath, g);
+                byte[]? groupBytes = provider.GetFileBytes(groupPath);
+                if (groupBytes == null)
+                {
+                    Console.WriteLine($"  WMO FAIL: group {g} not found: {groupPath}");
+                    continue;
+                }
+                try
+                {
+                    var grp = new WmoGroup(groupBytes);
+                    if (grp.IsValid)
+                    {
+                        groups.Add(grp);
+                        Console.WriteLine($"  WMO: group {g} OK — {grp.Geometry.VertexCount} verts, {grp.Geometry.CollisionTriangleCount} col tris, {grp.Geometry.RenderTriangleCount} ren tris");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  WMO: group {g} invalid (no geometry)");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"  WMO FAIL: group {g} parse error: {ex.Message}");
+                }
+            }
+            return (wmoFile, groups);
+        }
+
+        private void LoadSingleWmoInstance(string rootPath, MODF modf, List<WmoGroup> groups, Vector3? meshCenter, float placementSwitchThreshold)
+        {
+            var renderer = new WmoRenderer();
+            renderer.Name = Path.GetFileName(rootPath) ?? rootPath;
+            renderer.LoadGeometry(groups, modf, useDirectWowPlacement: false);
+
+            if (meshCenter.HasValue && TryComputeCenter(renderer.GetRecastTriangles(), out var legacyCenter))
+            {
+                float legacyDist = (legacyCenter - meshCenter.Value).Length;
+                if (legacyDist > placementSwitchThreshold)
+                {
+                    var alt = new WmoRenderer();
+                    alt.Name = renderer.Name;
+                    alt.LoadGeometry(groups, modf, useDirectWowPlacement: true);
+
+                    if (TryComputeCenter(alt.GetRecastTriangles(), out var directCenter))
+                    {
+                        float directDist = (directCenter - meshCenter.Value).Length;
+                        if (directDist + 100f < legacyDist)
+                        {
+                            renderer.Dispose();
+                            renderer = alt;
+                            Console.WriteLine($"  WMO placement switch -> direct mode (legacyDist={legacyDist:F1}, directDist={directDist:F1}): {rootPath}");
+                        }
+                        else
+                        {
+                            alt.Dispose();
+                        }
+                    }
+                    else
+                    {
+                        alt.Dispose();
+                    }
+                }
+            }
+
+            _wmoRenderers.Add(renderer);
+            Console.WriteLine($"  WMO OK (single): '{rootPath}' — {groups.Count} groups loaded, renderer added");
         }
 
         /// <summary>
@@ -2112,6 +2249,7 @@ namespace MeshViewer3D.Rendering
             _meshShader?.Dispose();
             _lineShader?.Dispose();
             _coloredLineShader?.Dispose();
+            _instancedShader?.Dispose();
 
             _disposed = true;
         }
