@@ -1115,6 +1115,11 @@ namespace MeshViewer3D.Rendering
                 1f, camera.FarPlane
             );
 
+            // Build view frustum once per frame (used by terrain/WMO/M2 culling below).
+            // Order is view * projection — shader does uProjection * uView * uModel * pos and OpenTK
+            // matrices are uploaded with transpose: false; the reverse order would silently break culling.
+            var frustum = Frustum.FromViewProjection(view * projection);
+
             // Render terrain heightmap — independent of navmesh fill toggle.
             // Must render BEFORE navmesh so depth buffer is populated correctly.
             if (_showTerrain && _terrainRenderers.Count > 0 && _terrainShader != null)
@@ -1131,7 +1136,10 @@ namespace MeshViewer3D.Rendering
                 GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 
                 foreach (var tr in _terrainRenderers)
+                {
+                    if (!frustum.IntersectsAabb(tr.BoundsMin, tr.BoundsMax)) continue;
                     tr.Render(view, projection, _terrainShader);
+                }
 
                 GL.Disable(EnableCap.Blend);
             }
@@ -1286,6 +1294,7 @@ namespace MeshViewer3D.Rendering
                 {
                     if (_wmoBlacklist.Count > 0 && _wmoBlacklist.Contains(wmoRenderer.Name))
                         continue;
+                    if (!frustum.IntersectsAabb(wmoRenderer.BoundsMin, wmoRenderer.BoundsMax)) continue;
                     wmoRenderer.Render(view, projection, _meshShader);
                 }
 
@@ -1300,7 +1309,10 @@ namespace MeshViewer3D.Rendering
                 GL.DepthMask(false);
 
                 foreach (var m2Renderer in _m2Renderers)
+                {
+                    if (!frustum.IntersectsAabb(m2Renderer.BoundsMin, m2Renderer.BoundsMax)) continue;
                     m2Renderer.Render(view, projection, _meshShader);
+                }
 
                 GL.DepthMask(true);
             }

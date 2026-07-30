@@ -58,6 +58,12 @@ namespace MeshViewer3D.Rendering
         public int    TotalTris  { get; private set; }
         public int    TotalVerts { get; private set; }
 
+        /// <summary>World-space AABB minimum (Detour coords). Computed once at load.</summary>
+        public Vector3 BoundsMin { get; private set; }
+
+        /// <summary>World-space AABB maximum (Detour coords). Computed once at load.</summary>
+        public Vector3 BoundsMax { get; private set; }
+
         // ── Factory ───────────────────────────────────────────────────────────
 
         /// <summary>
@@ -86,6 +92,10 @@ namespace MeshViewer3D.Rendering
                 [-1] = (new List<float>(), new List<uint>(), 0u)
             };
 
+            // Track world-space AABB across all chunks for frustum culling.
+            bool boundsInit = false;
+            Vector3 boundsMin = Vector3.Zero, boundsMax = Vector3.Zero;
+
             for (int cy = 0; cy < 16; cy++)
             {
                 for (int cx = 0; cx < 16; cx++)
@@ -103,7 +113,42 @@ namespace MeshViewer3D.Rendering
                     var entry = groupData[texId];
                     AddChunkVertices(chunk, entry.verts, entry.inds, ref entry.baseVert);
                     groupData[texId] = entry;
+
+                    // Update bounds from this chunk's X/Z extents + height range.
+                    float chunkXMin = chunk.PositionX - GRID_SIZE;
+                    float chunkXMax = chunk.PositionX;
+                    float chunkZMin = chunk.PositionY - GRID_SIZE;
+                    float chunkZMax = chunk.PositionY;
+                    float chunkYMin = chunk.BaseHeight;
+                    float chunkYMax = chunk.BaseHeight;
+                    for (int h = 0; h < chunk.Heights.Length; h++)
+                    {
+                        float v = chunk.BaseHeight + chunk.Heights[h];
+                        if (v < chunkYMin) chunkYMin = v;
+                        if (v > chunkYMax) chunkYMax = v;
+                    }
+                    if (!boundsInit)
+                    {
+                        boundsMin = new Vector3(chunkXMin, chunkYMin, chunkZMin);
+                        boundsMax = new Vector3(chunkXMax, chunkYMax, chunkZMax);
+                        boundsInit = true;
+                    }
+                    else
+                    {
+                        if (chunkXMin < boundsMin.X) boundsMin.X = chunkXMin;
+                        if (chunkZMin < boundsMin.Z) boundsMin.Z = chunkZMin;
+                        if (chunkYMin < boundsMin.Y) boundsMin.Y = chunkYMin;
+                        if (chunkXMax > boundsMax.X) boundsMax.X = chunkXMax;
+                        if (chunkZMax > boundsMax.Z) boundsMax.Z = chunkZMax;
+                        if (chunkYMax > boundsMax.Y) boundsMax.Y = chunkYMax;
+                    }
                 }
+            }
+
+            if (boundsInit)
+            {
+                BoundsMin = boundsMin;
+                BoundsMax = boundsMax;
             }
 
             // ── Pre-load all BLP textures ──────────────────────────────────

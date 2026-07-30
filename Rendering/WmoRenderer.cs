@@ -53,6 +53,12 @@ namespace MeshViewer3D.Rendering
         /// <summary>Display name (filename only) of this WMO, used for blacklist matching.</summary>
         public string Name { get; set; } = "";
 
+        /// <summary>World-space AABB minimum (Detour coords). Computed once at load.</summary>
+        public OpenTK.Mathematics.Vector3 BoundsMin { get; private set; }
+
+        /// <summary>World-space AABB maximum (Detour coords). Computed once at load.</summary>
+        public OpenTK.Mathematics.Vector3 BoundsMax { get; private set; }
+
         /// <summary>
         /// Returns the transformed triangles in Recast space (3 vertices per triangle).
         /// Used by MeshBaker for intersection testing.
@@ -161,6 +167,9 @@ namespace MeshViewer3D.Rendering
             // Retain CPU-side Recast-space triangles for MeshBaker
             _recastTriangles = BuildRecastTriangles(vertexData, indices);
 
+            // Compute world-space AABB once from the recast triangles — used by frustum culling.
+            ComputeBounds();
+
             if (vertexData.Count == 0 || indices.Count == 0)
             {
                 _indexCount = 0;
@@ -229,6 +238,26 @@ namespace MeshViewer3D.Rendering
                 tris[i] = new OpenTK.Mathematics.Vector3(vertexData[vBase], vertexData[vBase + 1], vertexData[vBase + 2]);
             }
             return tris;
+        }
+
+        private void ComputeBounds()
+        {
+            if (_recastTriangles.Length == 0)
+            {
+                BoundsMin = Vector3.Zero;
+                BoundsMax = Vector3.Zero;
+                return;
+            }
+            var min = _recastTriangles[0];
+            var max = min;
+            for (int i = 1; i < _recastTriangles.Length; i++)
+            {
+                var v = _recastTriangles[i];
+                if (v.X < min.X) min.X = v.X; if (v.Y < min.Y) min.Y = v.Y; if (v.Z < min.Z) min.Z = v.Z;
+                if (v.X > max.X) max.X = v.X; if (v.Y > max.Y) max.Y = v.Y; if (v.Z > max.Z) max.Z = v.Z;
+            }
+            BoundsMin = min;
+            BoundsMax = max;
         }
 
         // ── Rendering ─────────────────────────────────────────────────────────
