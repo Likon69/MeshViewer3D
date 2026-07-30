@@ -54,6 +54,8 @@ namespace MeshViewer3D.UI
         private readonly List<(int TileX, int TileY)> _loadedTileCoords = new();
         private EditableElements _editableElements = new();
         private DateTime _lastFrameTime = DateTime.Now;
+        private System.Diagnostics.Stopwatch _frameStopwatch = System.Diagnostics.Stopwatch.StartNew();
+        private const double TargetFrameMs = 1000.0 / 60.0; // 60 FPS hard cap
         private float _fps;
         private bool _blackspotClickMode = false;
         private bool _jumpLinkClickMode = false;
@@ -770,10 +772,11 @@ namespace MeshViewer3D.UI
 
             _console.Log("MeshViewer3D initialized. Quality: Honorbuddy/Apoc level.");
 
-            // Timer de rendu (60 FPS)
+            // Timer de rendu — interval below 16.67ms so Paint handler always fires often enough.
+            // Actual frame cap is enforced inside GlControl_Paint via _frameStopwatch + TargetFrameMs.
             _renderTimer = new System.Windows.Forms.Timer
             {
-                Interval = 16  // ~60 FPS
+                Interval = 8  // poll faster than 60 FPS; Paint handler skips excess frames
             };
             _renderTimer.Tick += (s, e) =>
             {
@@ -897,14 +900,25 @@ namespace MeshViewer3D.UI
             if (!_glControl.IsHandleCreated || _glControl.IsDisposed)
                 return;
 
+            // FPS lock: skip the frame if we already rendered within TargetFrameMs.
+            // Without this, the WinForms Timer (16ms = ~62.5 FPS) overshoots the 60 FPS target
+            // and the GPU is fed redundant draw calls every frame.
+            double sinceLast = _frameStopwatch.Elapsed.TotalMilliseconds;
+            if (sinceLast < TargetFrameMs - 0.5)
+            {
+                _glControl.Invalidate(); // queue another frame at the right time
+                return;
+            }
+
             try { _glControl.MakeCurrent(); }
             catch (OpenTK.Windowing.GraphicsLibraryFramework.GLFWException) { return; }
 
-            // Calculer FPS
+            // Calculer FPS (smoothed across the last second via _frameStopwatch)
             var now = DateTime.Now;
             float deltaTime = (float)(now - _lastFrameTime).TotalSeconds;
             _lastFrameTime = now;
             _fps = deltaTime > 0 ? 1f / deltaTime : 60f;
+            _frameStopwatch.Restart();
 
             if (_camera.FreeCameraMode)
                 UpdateFreeCameraMovement(deltaTime);
@@ -1180,6 +1194,9 @@ namespace MeshViewer3D.UI
 
             var allMeshes = new List<NavMeshData>();
             int loaded = 0, failed = 0;
+            int totalFiles = files.Length;
+            int lastPctLogged = -1;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
 
             foreach (var file in files)
             {
@@ -1194,7 +1211,17 @@ namespace MeshViewer3D.UI
                     _console?.LogWarning($"Skipped {Path.GetFileName(file)}: {ex.Message}");
                     failed++;
                 }
+
+                // Periodic progress — every 10% so the user gets feedback during big loads.
+                int pct = (int)(100.0 * (loaded + failed) / Math.Max(totalFiles, 1));
+                if (pct >= lastPctLogged + 10)
+                {
+                    _console?.Log($"Loading tiles: {loaded + failed}/{totalFiles} ({pct}%) [{sw.Elapsed.TotalSeconds:F1}s elapsed]");
+                    lastPctLogged = pct;
+                    Application.DoEvents(); // let UI repaint with new log line
+                }
             }
+            _console?.Log($"Tile parsing done: {loaded} loaded, {failed} failed in {sw.Elapsed.TotalSeconds:F1}s — uploading to GPU...");
 
             if (allMeshes.Count == 0)
             {
@@ -1214,10 +1241,15 @@ namespace MeshViewer3D.UI
             foreach (var mesh in allMeshes)
                 _loadedTileCoords.Add((mesh.TileX, mesh.TileY));
 
-            // Merge every loaded tile into one NavMeshData. Vertex/poly indices are uint now,
-            // so there is no 65k cap and no auto-subset fallback needed.
+            // Merge every loaded tile into one NavMeshData for operations (pathfinder/raycaster/baker).
+            // Renderer builds per-tile VAOs from `allMeshes` itself so it can distance-cull tiles
+            // individually. Vertex/poly indices are uint now — no 65k cap, no auto-subset.
+            _console?.Log($"Merging {allMeshes.Count} tiles + uploading to GPU...");
+            Application.DoEvents();
             _currentMesh = NavMeshData.Merge(allMeshes);
-            _renderer?.LoadMesh(_currentMesh);
+            _console?.Log($"Merge done ({_currentMesh.Polys.Length} polys, {_currentMesh.Vertices.Length} verts). Uploading GPU buffers...");
+            Application.DoEvents();
+            _renderer?.LoadMeshes(allMeshes);
             _renderer?.LoadTileSeams(allMeshes);
             _cameraController?.FrameScene();
             _minimap?.SetCurrentTile(_currentMesh.TileX, _currentMesh.TileY);

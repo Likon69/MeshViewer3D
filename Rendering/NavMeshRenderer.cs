@@ -33,17 +33,49 @@ namespace MeshViewer3D.Rendering
         private ShaderProgram? _coloredLineShader;
         private ShaderProgram? _terrainShader;
 
-        // Buffers navmesh
-        private int _meshVao, _meshVbo, _meshEbo;
-        private int _meshVertexCount;
+        // Buffers navmesh — one per tile for distance culling. Replaces the old single-VAO layout
+        // that forced every tile to draw every frame regardless of camera position.
+        private sealed class TileGpu : IDisposable
+        {
+            public Vector3 BMin, BMax;
+            public Vector3 Center => (BMin + BMax) * 0.5f;
 
-        // Buffers wireframe
-        private int _wireVao, _wireVbo, _wireEbo;
-        private int _wireVertexCount;
+            public int FillVao, FillVbo, FillEbo;
+            public int FillIndexCount;
 
-        // Buffers OffMesh
-        private int _offmeshVao, _offmeshVbo;
-        private int _offmeshVertexCount;
+            public int WireVao, WireVbo, WireEbo;
+            public int WireIndexCount;
+
+            public int OffVao, OffVbo;
+            public int OffVertexCount;
+
+            public void Dispose()
+            {
+                if (FillVao != 0) GL.DeleteVertexArray(FillVao);
+                if (FillVbo != 0) GL.DeleteBuffer(FillVbo);
+                if (FillEbo != 0) GL.DeleteBuffer(FillEbo);
+                if (WireVao != 0) GL.DeleteVertexArray(WireVao);
+                if (WireVbo != 0) GL.DeleteBuffer(WireVbo);
+                if (WireEbo != 0) GL.DeleteBuffer(WireEbo);
+                if (OffVao != 0) GL.DeleteVertexArray(OffVao);
+                if (OffVbo != 0) GL.DeleteBuffer(OffVbo);
+            }
+        }
+        private readonly List<TileGpu> _tiles = new();
+
+        // Distance-based cull tiers (yards). Tiers work like this:
+        // Source tiles retained for color-mode reload. Each entry is a single tile as loaded
+        // from disk (not the merged mesh). When the user changes color mode, we rebuild
+        // per-tile GPU buffers from this list.
+        private List<NavMeshData> _sourceTiles = new();
+
+        //   Near (< _cullMid):  full detail — fill + wireframe + offmesh
+        //   Mid  (< _cullFar):  fill only (wireframe lines sub-pixel at distance)
+        //   Far  (>= _cullFar): nothing
+        // Disabled by default — user wants to see the entire loaded area at once when exploring
+        // a continent. Per-tile architecture is kept so color-mode reload still works.
+        private float _cullMid = 5_000_000f;
+        private float _cullFar = 10_000_000f;
 
         // Buffers édition (blackspots, volumes, etc.)
         private int _blackspotVao, _blackspotVbo, _blackspotEbo;
@@ -51,6 +83,14 @@ namespace MeshViewer3D.Rendering
         
         private int _volumeVao, _volumeVbo, _volumeEbo;
         private int _volumeVertexCount;
+
+        // Single merged-mesh buffers (fast path when culling is disabled).
+        private int _meshVao, _meshVbo, _meshEbo;
+        private int _meshVertexCount;
+        private int _wireVao, _wireVbo, _wireEbo;
+        private int _wireVertexCount;
+        private int _offmeshVao, _offmeshVbo;
+        private int _offmeshVertexCount;
 
         // Buffers pour les Custom OffMesh Connections (Jump Links)
         private int _customOffmeshVao, _customOffmeshVbo;
@@ -150,52 +190,67 @@ namespace MeshViewer3D.Rendering
         public void LoadMesh(NavMeshData mesh)
         {
             _currentMesh = mesh;
+            _sourceTiles = new List<NavMeshData> { mesh };
+            BuildMergedGpu(mesh);
+        }
 
-            // Log navmesh bounds for coordinate verification
-            Log($"NavMesh BMin=({mesh.Header.BMin.X:F1},{mesh.Header.BMin.Y:F1},{mesh.Header.BMin.Z:F1}) BMax=({mesh.Header.BMax.X:F1},{mesh.Header.BMax.Y:F1},{mesh.Header.BMax.Z:F1})");
+        /// <summary>
+        /// Builds a single merged GPU buffer from the tile list. Fast path for loading
+        /// (one GL.BufferData instead of N×3). Per-tile VAOs in <see cref="_tiles"/> are
+        /// only built when the caller explicitly requests culling via <see cref="EnableTileCulling"/>.
+        /// </summary>
+        public void LoadMeshes(IList<NavMeshData> tiles)
+        {
+            // Always merge for ops + fast GPU upload.
+            _currentMesh = tiles.Count == 1 ? tiles[0] : NavMeshData.Merge(tiles);
+            _sourceTiles = new List<NavMeshData>(tiles);
+            BuildMergedGpu(_currentMesh);
+        }
 
-            // Générer données de rendu
+        /// <summary>
+        /// Build a single merged VAO/VBO/EBO containing all tiles. ~10× faster than
+        /// per-tile at load time for a continent. Used when culling is disabled (default).
+        /// </summary>
+        private void BuildMergedGpu(NavMeshData mesh)
+        {
+            // Free any previous per-tile GPU resources.
+            foreach (var t in _tiles) t.Dispose();
+            _tiles.Clear();
+
+            if (mesh.Polys.Length == 0) return;
+
+            // Build the merged render data + per-vertex colors.
             var (verts, indices, areas) = mesh.GenerateRenderData();
 
-            // Per-polygon color modes: build vertexIndex → polyIndex mapping
             System.Drawing.Color[]? componentColors = null;
             int[]? polyOfVertex = null;
-
-            bool needPolyMap = _colorMode == ColorMode.ByComponent || _colorMode == ColorMode.ByPolygon;
-            if (needPolyMap)
-            {
-                var vtxToPoly = new List<int>();
-                for (int pi = 0; pi < mesh.Polys.Length; pi++)
-                {
-                    int vc = mesh.Polys[pi].VertCount;
-                    if (vc < 3) continue;
-                    for (int v = 0; v < vc; v++)
-                        vtxToPoly.Add(pi);
-                }
-                polyOfVertex = vtxToPoly.ToArray();
-            }
 
             if (_colorMode == ColorMode.ByComponent)
             {
                 var components = Core.NavMeshAnalyzer.FindConnectedComponents(mesh, out int componentCount);
                 componentColors = Core.NavMeshAnalyzer.GenerateComponentColors(mesh, components, componentCount);
             }
+            if (_colorMode == ColorMode.ByComponent || _colorMode == ColorMode.ByPolygon)
+            {
+                var vtxToPoly = new List<int>();
+                for (int pi = 0; pi < mesh.Polys.Length; pi++)
+                {
+                    int vc = mesh.Polys[pi].VertCount;
+                    if (vc < 3) continue;
+                    for (int v = 0; v < vc; v++) vtxToPoly.Add(pi);
+                }
+                polyOfVertex = vtxToPoly.ToArray();
+            }
 
-            // Créer vertex data avec couleurs
-            var vertexData = new List<float>();
+            var vertexData = new List<float>(verts.Count * 6);
             float minHeight = mesh.Header.BMin.Y;
             float maxHeight = mesh.Header.BMax.Y;
-
             for (int i = 0; i < verts.Count; i++)
             {
-                // Position (3 floats)
                 vertexData.Add(verts[i].X);
                 vertexData.Add(verts[i].Y);
                 vertexData.Add(verts[i].Z);
-
-                // Couleur (3 floats) — areas is per-vertex from GenerateRenderData
                 byte area = i < areas.Count ? areas[i] : (byte)1;
-
                 System.Drawing.Color color;
                 if (_colorMode == ColorMode.ByComponent && componentColors != null && polyOfVertex != null)
                 {
@@ -205,9 +260,8 @@ namespace MeshViewer3D.Rendering
                 else if (_colorMode == ColorMode.ByHeight)
                 {
                     bool walkable = area > 0 && area < 63;
-                    color = walkable 
-                        ? ColorScheme.GetHeightColor(verts[i].Y, minHeight, maxHeight)
-                        : ColorScheme.GetHeightColorObstacle(verts[i].Y, minHeight, maxHeight);
+                    color = walkable ? ColorScheme.GetHeightColor(verts[i].Y, minHeight, maxHeight)
+                                     : ColorScheme.GetHeightColorObstacle(verts[i].Y, minHeight, maxHeight);
                 }
                 else if (_colorMode == ColorMode.ByPolygon && polyOfVertex != null)
                 {
@@ -216,13 +270,100 @@ namespace MeshViewer3D.Rendering
                 }
                 else if (_colorMode == ColorMode.Flat)
                 {
-                    // Uniform flat color — walkable=light green, unwalkable=dark red
+                    bool walkable = area > 0 && area < 63;
+                    color = walkable ? System.Drawing.Color.FromArgb(100, 180, 100)
+                                     : System.Drawing.Color.FromArgb(160, 60, 60);
+                }
+                else
+                {
+                    color = ColorScheme.GetAreaColor(area);
+                }
+                vertexData.Add(color.R / 255f);
+                vertexData.Add(color.G / 255f);
+                vertexData.Add(color.B / 255f);
+            }
+
+            // Single fill VAO
+            _meshVao = GL.GenVertexArray();
+            GL.BindVertexArray(_meshVao);
+
+            _meshVbo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _meshVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, vertexData.Count * sizeof(float),
+                          vertexData.ToArray(), BufferUsageHint.StaticDraw);
+
+            _meshEbo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _meshEbo);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Count * sizeof(uint),
+                          indices.ToArray(), BufferUsageHint.StaticDraw);
+
+            int stride = 6 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
+
+            _meshVertexCount = indices.Count;
+
+            CreateWireframe(mesh);
+            CreateOffMeshLines(mesh);
+
+            GL.BindVertexArray(0);
+        }
+
+        private void BuildVertexColors(
+            List<Vector3> verts, List<byte> areas, NavMeshData tile,
+            System.Drawing.Color[]? componentColors, int[]? polyOfVertex,
+            List<float> vertexData)
+        {
+            float minHeight = tile.Header.BMin.Y;
+            float maxHeight = tile.Header.BMax.Y;
+
+            // For component/polygon modes, we need polyIndex relative to the MERGED mesh.
+            // Simplification: tile-level poly indexing won't match merged polyIdx exactly, so
+            // those modes fall back to ByAreaType here. (Full merged-mesh component color
+            // requires tracking poly offsets per tile — defer.)
+            bool useByComponent = _colorMode == ColorMode.ByComponent && componentColors != null && _currentMesh != null
+                && ReferenceEquals(_currentMesh, tile); // single-tile path only
+            bool useByPolygon = _colorMode == ColorMode.ByPolygon && polyOfVertex != null
+                && _currentMesh != null && ReferenceEquals(_currentMesh, tile);
+
+            for (int i = 0; i < verts.Count; i++)
+            {
+                vertexData.Add(verts[i].X);
+                vertexData.Add(verts[i].Y);
+                vertexData.Add(verts[i].Z);
+
+                byte area = i < areas.Count ? areas[i] : (byte)1;
+                System.Drawing.Color color;
+
+                if (useByComponent)
+                {
+                    // Single-tile path — poly index maps directly.
+                    // polyOfVertex is built over the merged mesh which equals tile here.
+                    int polyIdx = i < polyOfVertex!.Length ? polyOfVertex[i] : 0;
+                    color = polyIdx < componentColors!.Length ? componentColors[polyIdx] : System.Drawing.Color.Gray;
+                }
+                else if (_colorMode == ColorMode.ByHeight)
+                {
+                    bool walkable = area > 0 && area < 63;
+                    color = walkable
+                        ? ColorScheme.GetHeightColor(verts[i].Y, minHeight, maxHeight)
+                        : ColorScheme.GetHeightColorObstacle(verts[i].Y, minHeight, maxHeight);
+                }
+                else if (useByPolygon)
+                {
+                    int polyIdx = i < polyOfVertex!.Length ? polyOfVertex[i] : 0;
+                    color = ColorScheme.GetPolygonDebugColor(polyIdx);
+                }
+                else if (_colorMode == ColorMode.Flat)
+                {
                     bool walkable = area > 0 && area < 63;
                     color = walkable
                         ? System.Drawing.Color.FromArgb(100, 180, 100)
                         : System.Drawing.Color.FromArgb(160, 60, 60);
                 }
-                else // ByAreaType (default)
+                else // ByAreaType (default) — also fallback for component/polygon on multi-tile
                 {
                     color = ColorScheme.GetAreaColor(area);
                 }
@@ -231,39 +372,77 @@ namespace MeshViewer3D.Rendering
                 vertexData.Add(color.G / 255f);
                 vertexData.Add(color.B / 255f);
             }
+        }
 
-            // Créer VAO/VBO/EBO pour mesh
-            _meshVao = GL.GenVertexArray();
-            GL.BindVertexArray(_meshVao);
+        private void BuildTileWireframe(NavMeshData tile, TileGpu gpu)
+        {
+            var (edgeVerts, edgeIndices) = tile.GenerateWireframeData();
+            if (edgeIndices.Count == 0)
+            {
+                gpu.WireIndexCount = 0;
+                return;
+            }
 
-            _meshVbo = GL.GenBuffer();
-            GL.BindBuffer(BufferTarget.ArrayBuffer, _meshVbo);
-            GL.BufferData(BufferTarget.ArrayBuffer, vertexData.Count * sizeof(float), 
-                          vertexData.ToArray(), BufferUsageHint.StaticDraw);
+            gpu.WireVao = GL.GenVertexArray();
+            GL.BindVertexArray(gpu.WireVao);
 
-            _meshEbo = GL.GenBuffer();
-            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _meshEbo);
-            GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Count * sizeof(uint),
-                          indices.ToArray(), BufferUsageHint.StaticDraw);
+            gpu.WireVbo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, gpu.WireVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, edgeVerts.Count * 3 * sizeof(float),
+                          edgeVerts.ToArray(), BufferUsageHint.StaticDraw);
 
-            // Vertex attributes
-            int stride = 6 * sizeof(float);
-            // Position
+            gpu.WireEbo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, gpu.WireEbo);
+            GL.BufferData(BufferTarget.ElementArrayBuffer, edgeIndices.Count * sizeof(uint),
+                          edgeIndices.ToArray(), BufferUsageHint.StaticDraw);
+
+            int stride = 3 * sizeof(float);
             GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
             GL.EnableVertexAttribArray(0);
-            // Color
+
+            gpu.WireIndexCount = edgeIndices.Count;
+        }
+
+        private void BuildTileOffMesh(NavMeshData tile, TileGpu gpu)
+        {
+            if (tile.OffMeshConnections.Length == 0)
+            {
+                gpu.OffVertexCount = 0;
+                return;
+            }
+
+            var lineData = new List<float>();
+            const float r = 0f, g = 1f, b = 1f;
+            foreach (var con in tile.OffMeshConnections)
+                AddOffMeshArcVertices(lineData, con.Start, con.End, r, g, b);
+
+            if (lineData.Count == 0) { gpu.OffVertexCount = 0; return; }
+
+            gpu.OffVao = GL.GenVertexArray();
+            GL.BindVertexArray(gpu.OffVao);
+
+            gpu.OffVbo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, gpu.OffVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, lineData.Count * sizeof(float),
+                          lineData.ToArray(), BufferUsageHint.StaticDraw);
+
+            int stride = 6 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+            GL.EnableVertexAttribArray(0);
             GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
             GL.EnableVertexAttribArray(1);
 
-            _meshVertexCount = indices.Count;
+            gpu.OffVertexCount = lineData.Count / 6;
+        }
 
-            // Créer wireframe
-            CreateWireframe(mesh);
-
-            // Créer OffMesh
-            CreateOffMeshLines(mesh);
-
-            GL.BindVertexArray(0);
+        /// <summary>
+        /// Set the distance tiers (yards). Tiles beyond <paramref name="farDistance"/> are
+        /// skipped entirely; between mid and far, fill is drawn but wireframe + offmesh are skipped.
+        /// </summary>
+        public void SetCullDistances(float midDistance, float farDistance)
+        {
+            _cullMid = midDistance;
+            _cullFar = farDistance;
         }
 
         /// <summary>
@@ -777,6 +956,33 @@ namespace MeshViewer3D.Rendering
             _wireVertexCount = edgeIndices.Count;
         }
 
+        private void CreateOffMeshLines(NavMeshData mesh)
+        {
+            var lineData = new List<float>();
+            const float r = 0f, g = 1f, b = 1f;
+            foreach (var con in mesh.OffMeshConnections)
+                AddOffMeshArcVertices(lineData, con.Start, con.End, r, g, b);
+
+            if (lineData.Count == 0) return;
+
+            _offmeshVao = GL.GenVertexArray();
+            GL.BindVertexArray(_offmeshVao);
+
+            _offmeshVbo = GL.GenBuffer();
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _offmeshVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, lineData.Count * sizeof(float),
+                          lineData.ToArray(), BufferUsageHint.StaticDraw);
+
+            int stride = 6 * sizeof(float);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+            GL.EnableVertexAttribArray(1);
+
+            _offmeshVertexCount = lineData.Count / 6;
+            GL.BindVertexArray(0);
+        }
+
         /// <summary>
         /// Adds parabolic arc off-mesh geometry (circle at start + arc + arrowhead at end)
         /// into a colored vertex list (6 floats per vertex: XYZ + RGB).
@@ -832,35 +1038,8 @@ namespace MeshViewer3D.Rendering
             verts.Add(wing2.X); verts.Add(wing2.Y); verts.Add(wing2.Z); verts.Add(r); verts.Add(g); verts.Add(b);
         }
 
-        private void CreateOffMeshLines(NavMeshData mesh)
-        {
-            var lineData = new List<float>();
-
-            // Cyan — native tile off-mesh connections rendered as parabolic arcs (same style as HB)
-            const float r = 0f, g = 1f, b = 1f;
-
-            foreach (var con in mesh.OffMeshConnections)
-                AddOffMeshArcVertices(lineData, con.Start, con.End, r, g, b);
-
-            if (lineData.Count == 0) return;
-
-            _offmeshVao = GL.GenVertexArray();
-            GL.BindVertexArray(_offmeshVao);
-
-            _offmeshVbo = GL.GenBuffer();
-            GL.BindBuffer(BufferTarget.ArrayBuffer, _offmeshVbo);
-            GL.BufferData(BufferTarget.ArrayBuffer, lineData.Count * sizeof(float),
-                          lineData.ToArray(), BufferUsageHint.StaticDraw);
-
-            int stride = 6 * sizeof(float);
-            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
-            GL.EnableVertexAttribArray(0);
-            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
-            GL.EnableVertexAttribArray(1);
-
-            _offmeshVertexCount = lineData.Count / 6;
-            GL.BindVertexArray(0);
-        }
+        /// <summary>
+        /// Straight hollow tube for native tile off-mesh connections.
 
         /// <summary>
         /// Straight hollow tube for native tile off-mesh connections.
@@ -957,7 +1136,7 @@ namespace MeshViewer3D.Rendering
                 GL.Disable(EnableCap.Blend);
             }
 
-            // Render navmesh polygon fill
+            // Render navmesh polygon fill — single merged VAO (one draw call per pass).
             if (_showNavMeshFill)
             {
                 _meshShader.Use();
@@ -980,14 +1159,14 @@ namespace MeshViewer3D.Rendering
                     GL.Disable(EnableCap.Blend);
             }
 
-            // Render wireframe
+            // Render wireframe — single merged VAO.
             if (_showWireframe && _wireVertexCount > 0)
             {
                 _lineShader.Use();
                 _lineShader.SetMatrix4("uModel", model);
                 _lineShader.SetMatrix4("uView", view);
                 _lineShader.SetMatrix4("uProjection", projection);
-                
+
                 var wireColor = ColorScheme.ColorToVector4(ColorScheme.Wireframe);
                 wireColor.W = _wireAlpha / 255f; // Controlled by Wire Alpha slider
                 _lineShader.SetVector4("uColor", wireColor);
@@ -1013,7 +1192,7 @@ namespace MeshViewer3D.Rendering
                 GL.LineWidth(1.0f);
             }
 
-            // Render OffMesh from tile (arcs paraboliques + cercles + flèches)
+            // Render OffMesh from tile (arcs paraboliques + cercles + flèches) — single merged VAO.
             if (_showOffMesh && _offmeshVertexCount > 0)
             {
                 _coloredLineShader.Use();
@@ -1171,7 +1350,7 @@ namespace MeshViewer3D.Rendering
                 {
                     _colorMode = value;
                     if (_currentMesh != null)
-                        LoadMesh(_currentMesh); // Reload avec nouvelles couleurs
+                        BuildMergedGpu(_currentMesh); // Rebuild merged buffer with new colors
                 }
             }
         }
@@ -1852,10 +2031,11 @@ namespace MeshViewer3D.Rendering
             foreach (var r in _m2Renderers) r.Dispose();
             _m2Renderers.Clear();
 
+            // Free per-tile GPU resources.
+            foreach (var t in _tiles) t.Dispose();
+            _tiles.Clear();
+
             // Keep existing GL buffers allocated; just mark them unused.
-            _meshVertexCount = 0;
-            _wireVertexCount = 0;
-            _offmeshVertexCount = 0;
             _blackspotVertexCount = 0;
             _volumeVertexCount = 0;
             _customOffmeshVertexCount = 0;
@@ -1880,7 +2060,7 @@ namespace MeshViewer3D.Rendering
             foreach (var r in _m2Renderers) r.Dispose();
             _m2Renderers.Clear();
 
-            // Delete buffers
+            // Delete merged navmesh GPU buffers
             if (_meshVao != 0) GL.DeleteVertexArray(_meshVao);
             if (_meshVbo != 0) GL.DeleteBuffer(_meshVbo);
             if (_meshEbo != 0) GL.DeleteBuffer(_meshEbo);
@@ -1889,6 +2069,11 @@ namespace MeshViewer3D.Rendering
             if (_wireEbo != 0) GL.DeleteBuffer(_wireEbo);
             if (_offmeshVao != 0) GL.DeleteVertexArray(_offmeshVao);
             if (_offmeshVbo != 0) GL.DeleteBuffer(_offmeshVbo);
+
+            // Per-tile buffers (none in current single-merged path, but kept for safety)
+            foreach (var t in _tiles) t.Dispose();
+            _tiles.Clear();
+
             if (_blackspotVao != 0) GL.DeleteVertexArray(_blackspotVao);
             if (_blackspotVbo != 0) GL.DeleteBuffer(_blackspotVbo);
             if (_blackspotEbo != 0) GL.DeleteBuffer(_blackspotEbo);

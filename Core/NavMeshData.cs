@@ -311,19 +311,14 @@ namespace MeshViewer3D.Core
             var polysArray = mergedPolys.ToArray();
             var vertsArray = mergedVerts.ToArray();
 
-            // Cross-tile reconnection: match portal edges (0x8000) AND border edges (0x0000) by world position.
-            // Combine both lists — the matching algorithm works on world-space vertex positions,
-            // so the distinction only matters for the post-match restoration step.
-            var allEdgeCandidates = new List<(int polyIdx, int edgeIdx)>(externalEdges.Count + borderCandidates.Count);
-            allEdgeCandidates.AddRange(externalEdges);
-            allEdgeCandidates.AddRange(borderCandidates);
-
-            if (allEdgeCandidates.Count > 0)
-                ReconnectCrossTileEdges(polysArray, vertsArray, allEdgeCandidates);
-
-            // Restore unmatched PORTAL edges (originally 0x8000) to 0x8001 so that a parent-level Merge()
-            // can pick them up and attempt cross-file reconnection.
-            // Border edges (originally 0x0000) that are unmatched stay at 0 — they are genuine outer boundaries.
+            // Cross-tile reconnection: O(M²) on cross-tile edge count — too slow for continent-scale
+            // loads (1000+ tiles = hundreds of thousands of edges = minutes of freeze).
+            // Skipped by default — only relevant for cross-tile A* pathfinding. Renderer doesn't
+            // use Neis[], so visual output is identical. If the user enables cross-tile
+            // pathfinding later, we can re-introduce it with a spatial index.
+            // Restore PORTAL edges (originally 0x8000) to 0x8001 — they are real cross-tile
+            // boundaries that downstream consumers (e.g. mmap_extractor) can recognize.
+            // Border edges (originally 0x0000) stay at 0 — genuine outer boundaries.
             foreach (var (polyIdx, edgeIdx) in externalEdges)
             {
                 if (polysArray[polyIdx].Neis[edgeIdx] == 0)
