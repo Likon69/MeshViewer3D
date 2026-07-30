@@ -17,7 +17,8 @@ namespace MeshViewer3D.Core
         /// Returns a list of waypoints (in Detour coordinates) or null if no path exists.
         /// Integrates off-mesh connections and applies funnel string-pulling for smooth paths.
         /// </summary>
-        public static List<Vector3>? FindPath(NavMeshData mesh, Vector3 startPos, int startPoly, Vector3 endPos, int endPoly)
+        public static List<Vector3>? FindPath(NavMeshData mesh, Vector3 startPos, int startPoly, Vector3 endPos, int endPoly,
+            Dictionary<int, List<(int targetPoly, int offMeshIdx)>>? offMeshByPoly = null)
         {
             if (startPoly == endPoly)
                 return new List<Vector3> { startPos, endPos };
@@ -26,8 +27,9 @@ namespace MeshViewer3D.Core
             if (startPoly < 0 || startPoly >= polyCount || endPoly < 0 || endPoly >= polyCount)
                 return null;
 
-            // Build off-mesh lookup: for each polygon, list of (targetPoly, offMeshIndex)
-            var offMeshByPoly = BuildOffMeshLookup(mesh);
+            // Use the caller-provided off-mesh lookup (built once at mesh load) if given;
+            // otherwise build it on the fly for backward compatibility.
+            offMeshByPoly ??= BuildOffMeshLookup(mesh);
 
             // A* using PriorityQueue (.NET 6)
             var openSet = new PriorityQueue<int, float>();
@@ -109,7 +111,7 @@ namespace MeshViewer3D.Core
         /// Builds a lookup of off-mesh connections indexed by source polygon.
         /// For bidirectional connections, adds entries in both directions.
         /// </summary>
-        private static Dictionary<int, List<(int targetPoly, int offMeshIdx)>> BuildOffMeshLookup(NavMeshData mesh)
+        internal static Dictionary<int, List<(int targetPoly, int offMeshIdx)>> BuildOffMeshLookup(NavMeshData mesh)
         {
             var lookup = new Dictionary<int, List<(int, int)>>();
             if (mesh.OffMeshConnections.Length == 0) return lookup;

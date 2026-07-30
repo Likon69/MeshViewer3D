@@ -51,6 +51,8 @@ namespace MeshViewer3D.UI
 
         // État
         private NavMeshData? _currentMesh;
+        private Core.NavMeshRaycastIndex? _raycastIndex;
+        private Dictionary<int, List<(int targetPoly, int offMeshIdx)>>? _offMeshLookup;
         private readonly List<(int TileX, int TileY)> _loadedTileCoords = new();
         private EditableElements _editableElements = new();
         private DateTime _lastFrameTime = DateTime.Now;
@@ -826,34 +828,74 @@ namespace MeshViewer3D.UI
             Vector3 closestHit = Vector3.Zero;
             bool foundHit = false;
 
-            for (int i = 0; i < _currentMesh.Polys.Length; i++)
+            // If the spatial index is available, walk only the cells the ray crosses.
+            // Otherwise fall back to a full-mesh scan (still correct, just slow).
+            if (_raycastIndex != null)
             {
-                var poly = _currentMesh.Polys[i];
-                if (poly.VertCount < 3) continue;
-
-                for (int j = 1; j < poly.VertCount - 1; j++)
+                foreach (int polyIdx in _raycastIndex.QueryRay(ray))
                 {
-                    var v0 = _currentMesh.Vertices[poly.Verts[0]];
-                    var v1 = _currentMesh.Vertices[poly.Verts[j]];
-                    var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+                    var poly = _currentMesh.Polys[polyIdx];
+                    if (poly.VertCount < 3) continue;
 
-                    if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
+                    for (int j = 1; j < poly.VertCount - 1; j++)
                     {
-                        if (dist < closestDistance)
+                        var v0 = _currentMesh.Vertices[poly.Verts[0]];
+                        var v1 = _currentMesh.Vertices[poly.Verts[j]];
+                        var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+
+                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
                         {
-                            closestDistance = dist;
-                            closestHit = hit;
-                            foundHit = true;
+                            if (dist < closestDistance)
+                            {
+                                closestDistance = dist;
+                                closestHit = hit;
+                                foundHit = true;
+                            }
+                        }
+
+                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v2, v1, out float dist2, out Vector3 hit2))
+                        {
+                            if (dist2 < closestDistance)
+                            {
+                                closestDistance = dist2;
+                                closestHit = hit2;
+                                foundHit = true;
+                            }
                         }
                     }
+                }
+            }
+            else
+            {
+                for (int i = 0; i < _currentMesh.Polys.Length; i++)
+                {
+                    var poly = _currentMesh.Polys[i];
+                    if (poly.VertCount < 3) continue;
 
-                    if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v2, v1, out float dist2, out Vector3 hit2))
+                    for (int j = 1; j < poly.VertCount - 1; j++)
                     {
-                        if (dist2 < closestDistance)
+                        var v0 = _currentMesh.Vertices[poly.Verts[0]];
+                        var v1 = _currentMesh.Vertices[poly.Verts[j]];
+                        var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+
+                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
                         {
-                            closestDistance = dist2;
-                            closestHit = hit2;
-                            foundHit = true;
+                            if (dist < closestDistance)
+                            {
+                                closestDistance = dist;
+                                closestHit = hit;
+                                foundHit = true;
+                            }
+                        }
+
+                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v2, v1, out float dist2, out Vector3 hit2))
+                        {
+                            if (dist2 < closestDistance)
+                            {
+                                closestDistance = dist2;
+                                closestHit = hit2;
+                                foundHit = true;
+                            }
                         }
                     }
                 }
@@ -1116,6 +1158,8 @@ namespace MeshViewer3D.UI
                     _console?.Log($"Loading tile: {System.IO.Path.GetFileName(ofd.FileName)}...");
                     
                     _currentMesh = MmtileLoader.LoadTile(ofd.FileName);
+                    _raycastIndex = _currentMesh != null ? new Core.NavMeshRaycastIndex(_currentMesh) : null;
+                    _offMeshLookup = _currentMesh != null ? Core.NavMeshPathfinder.BuildOffMeshLookup(_currentMesh) : null;
                     _loadedTileCoords.Clear();
                     _loadedTileCoords.Add((_currentMesh.TileX, _currentMesh.TileY));
                     _renderer?.LoadMesh(_currentMesh);
@@ -1247,6 +1291,8 @@ namespace MeshViewer3D.UI
             _console?.Log($"Merging {allMeshes.Count} tiles + uploading to GPU...");
             Application.DoEvents();
             _currentMesh = NavMeshData.Merge(allMeshes);
+            _raycastIndex = new Core.NavMeshRaycastIndex(_currentMesh);
+            _offMeshLookup = Core.NavMeshPathfinder.BuildOffMeshLookup(_currentMesh);
             _console?.Log($"Merge done ({_currentMesh.Polys.Length} polys, {_currentMesh.Vertices.Length} verts). Uploading GPU buffers...");
             Application.DoEvents();
             _renderer?.LoadMeshes(allMeshes);
@@ -1565,6 +1611,8 @@ namespace MeshViewer3D.UI
         {
             _loadedTileCoords.Clear();
             _currentMesh = null;
+            _raycastIndex = null;
+            _offMeshLookup = null;
             _renderer?.ClearLoadedData();
             ClearTestNavState();
             _minimap?.Clear();
@@ -2707,7 +2755,8 @@ namespace MeshViewer3D.UI
                 _testNavStartPoint.Value,
                 _testNavStartPolyIndex,
                 _testNavEndPoint.Value,
-                _testNavEndPolyIndex);
+                _testNavEndPolyIndex,
+                _offMeshLookup);
             sw.Stop();
 
             _testNavHasAttemptedPath = true;
@@ -2740,24 +2789,52 @@ namespace MeshViewer3D.UI
                 Vector3 closestHit = Vector3.Zero;
                 int closestPolyIndex = -1;
 
-                for (int i = 0; i < _currentMesh.Polys.Length; i++)
+                if (_raycastIndex != null)
                 {
-                    var poly = _currentMesh.Polys[i];
-                    if (poly.VertCount < 3) continue;
-
-                    for (int j = 1; j < poly.VertCount - 1; j++)
+                    foreach (int polyIdx in _raycastIndex.QueryRay(ray))
                     {
-                        var v0 = _currentMesh.Vertices[poly.Verts[0]];
-                        var v1 = _currentMesh.Vertices[poly.Verts[j]];
-                        var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+                        var poly = _currentMesh.Polys[polyIdx];
+                        if (poly.VertCount < 3) continue;
 
-                        if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
+                        for (int j = 1; j < poly.VertCount - 1; j++)
                         {
-                            if (dist < closestDistance)
+                            var v0 = _currentMesh.Vertices[poly.Verts[0]];
+                            var v1 = _currentMesh.Vertices[poly.Verts[j]];
+                            var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+
+                            if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
                             {
-                                closestDistance = dist;
-                                closestHit = hit;
-                                closestPolyIndex = i;
+                                if (dist < closestDistance)
+                                {
+                                    closestDistance = dist;
+                                    closestHit = hit;
+                                    closestPolyIndex = polyIdx;
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    for (int i = 0; i < _currentMesh.Polys.Length; i++)
+                    {
+                        var poly = _currentMesh.Polys[i];
+                        if (poly.VertCount < 3) continue;
+
+                        for (int j = 1; j < poly.VertCount - 1; j++)
+                        {
+                            var v0 = _currentMesh.Vertices[poly.Verts[0]];
+                            var v1 = _currentMesh.Vertices[poly.Verts[j]];
+                            var v2 = _currentMesh.Vertices[poly.Verts[j + 1]];
+
+                            if (Rendering.RayCaster.RayTriangleIntersect(ray, v0, v1, v2, out float dist, out Vector3 hit))
+                            {
+                                if (dist < closestDistance)
+                                {
+                                    closestDistance = dist;
+                                    closestHit = hit;
+                                    closestPolyIndex = i;
+                                }
                             }
                         }
                     }
