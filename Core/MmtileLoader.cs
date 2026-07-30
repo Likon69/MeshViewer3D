@@ -296,8 +296,16 @@ namespace MeshViewer3D.Core
                     polys[i].Verts[j] = br.ReadUInt16();
 
                 // 6 neighbor indices (12 bytes)
+                // Detour 16-bit encoding uses bit 15 (0x8000) as the external-portal flag.
+                // With uint storage, we move the flag to bit 31 (0x80000000) so it never
+                // collides with valid polyIdx+1 values (which can exceed 0xFFFF in merged meshes).
                 for (int j = 0; j < NavPoly.MAX_VERTS; j++)
-                    polys[i].Neis[j] = br.ReadUInt16();
+                {
+                    ushort rawNei = br.ReadUInt16();
+                    polys[i].Neis[j] = (rawNei & 0x8000) != 0
+                        ? (0x80000000u | (uint)rawNei)
+                        : (uint)rawNei;
+                }
                 
                 polys[i].Flags = br.ReadUInt16();
                 polys[i].VertCount = br.ReadByte();

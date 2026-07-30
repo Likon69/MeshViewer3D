@@ -269,11 +269,12 @@ namespace MeshViewer3D.Core
                     newPoly.Neis = (uint[])poly.Neis.Clone();
                     for (int i = 0; i < newPoly.VertCount; i++)
                         newPoly.Verts[i] = newPoly.Verts[i] + (uint)vertOffset;
-                    // Offset neighbor indices: Detour stores polyIdx+1 (0=no neighbor, ≥0x8000=external)
+                    // Offset neighbor indices: Detour stores polyIdx+1 (0=no neighbor, ≥0x80000000=external)
+                    // After the MmtileLoader conversion, external edges carry bit 31 (0x80000000).
                     for (int i = 0; i < newPoly.VertCount; i++)
                     {
                         uint nei = newPoly.Neis[i];
-                        if (nei != 0 && (nei & 0x8000) == 0)
+                        if (nei != 0 && (nei & 0x80000000) == 0)
                         {
                             int offsetIdx = (int)nei - 1 + polyOffset;
                             if (offsetIdx >= 0 && offsetIdx < mergedPolys.Count + tile.Polys.Length)
@@ -281,7 +282,7 @@ namespace MeshViewer3D.Core
                             else
                                 newPoly.Neis[i] = 0; // Invalid neighbor — block link
                         }
-                        else if ((nei & 0x8000) != 0)
+                        else if ((nei & 0x80000000) != 0)
                         {
                             newPoly.Neis[i] = 0; // zero for now — will reconnect below
                             externalEdges.Add((mergedPolyIdx, i));
@@ -311,18 +312,25 @@ namespace MeshViewer3D.Core
             var polysArray = mergedPolys.ToArray();
             var vertsArray = mergedVerts.ToArray();
 
-            // Cross-tile reconnection: O(M²) on cross-tile edge count — too slow for continent-scale
-            // loads (1000+ tiles = hundreds of thousands of edges = minutes of freeze).
-            // Skipped by default — only relevant for cross-tile A* pathfinding. Renderer doesn't
-            // use Neis[], so visual output is identical. If the user enables cross-tile
-            // pathfinding later, we can re-introduce it with a spatial index.
-            // Restore PORTAL edges (originally 0x8000) to 0x8001 — they are real cross-tile
-            // boundaries that downstream consumers (e.g. mmap_extractor) can recognize.
-            // Border edges (originally 0x0000) stay at 0 — genuine outer boundaries.
+            // Cross-tile reconnection: match portal edges (0x8000) AND border edges (0x0000) by world position.
+            // Combine both lists — the matching algorithm works on world-space vertex positions,
+            // so the distinction only matters for the post-match restoration step.
+            var allEdgeCandidates = new List<(int polyIdx, int edgeIdx)>(externalEdges.Count + borderCandidates.Count);
+            allEdgeCandidates.AddRange(externalEdges);
+            allEdgeCandidates.AddRange(borderCandidates);
+
+            if (allEdgeCandidates.Count > 0)
+                ReconnectCrossTileEdges(polysArray, vertsArray, allEdgeCandidates);
+
+            // Restore unmatched PORTAL edges (originally 0x8000) to 0x80000001 so that a parent-level
+            // Merge() can pick them up and attempt cross-file reconnection. The 0x8000..0xFFFF
+            // range (with side info in low bits) is mapped to 0x80000000 + raw on load — see
+            // MmtileLoader.ReadPolys. The pathfinder's external check is `(nei & 0x80000000) != 0`.
+            // Border edges (originally 0x0000) that are unmatched stay at 0 — they are genuine outer boundaries.
             foreach (var (polyIdx, edgeIdx) in externalEdges)
             {
                 if (polysArray[polyIdx].Neis[edgeIdx] == 0)
-                    polysArray[polyIdx].Neis[edgeIdx] = 0x8001u;
+                    polysArray[polyIdx].Neis[edgeIdx] = 0x80000001u;
             }
 
             var mergedHeader = list[0].Header;
@@ -358,7 +366,7 @@ namespace MeshViewer3D.Core
         /// different heights at the seam (up to one heightfield cell height ≈ walkableClimb).
         /// </summary>
         private static void ReconnectCrossTileEdges(NavPoly[] polys, Vector3[] verts,
-            List<(int polyIdx, int edgeIdx)> externalEdges)
+            List<(int polyIdx, int edgeIdx)> allEdgeCandidates)
         {
             const float epsXZ   = 0.05f;         // XZ: 5 cm — covers heightfield quantization noise
             const float epsXZSq = epsXZ * epsXZ;
@@ -371,11 +379,9 @@ namespace MeshViewer3D.Core
                 return dx * dx + dz * dz < epsXZSq && MathF.Abs(a.Y - b.Y) <= epsY;
             }
 
-            // Build spatial index: for each external edge, store its two vertex positions
-            // Then match pairs with coincident vertices
-            var edgeList = new List<(int polyIdx, int edgeIdx, Vector3 v0, Vector3 v1)>(externalEdges.Count);
-
-            foreach (var (polyIdx, edgeIdx) in externalEdges)
+            // Build candidate list (both external portal edges + border edges without portal flag)
+            var edgeList = new List<(int polyIdx, int edgeIdx, Vector3 v0, Vector3 v1)>(allEdgeCandidates.Count);
+            foreach (var (polyIdx, edgeIdx) in allEdgeCandidates)
             {
                 var poly = polys[polyIdx];
                 int nextEdge = (edgeIdx + 1) % poly.VertCount;

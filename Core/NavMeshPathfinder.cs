@@ -59,7 +59,7 @@ namespace MeshViewer3D.Core
                 for (int e = 0; e < poly.VertCount; e++)
                 {
                     uint nei = poly.Neis[e];
-                    if (nei == 0 || (nei & 0x8000) != 0) continue;
+                    if (nei == 0 || (nei & 0x80000000) != 0) continue;
 
                     int neighborIdx = (int)nei - 1; // Detour: neis stores polyIdx + 1
                     if (neighborIdx < 0 || neighborIdx >= polyCount) continue;
