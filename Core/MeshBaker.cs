@@ -327,8 +327,8 @@ namespace MeshViewer3D.Core
             {
                 var p = NavPoly.Create();
                 p.FirstLink  = DT_NULL_LINK;
-                p.Verts[0]   = (ushort)(oldVertCount + 2 * i);
-                p.Verts[1]   = (ushort)(oldVertCount + 2 * i + 1);
+                p.Verts[0]   = (uint)(oldVertCount + 2 * i);
+                p.Verts[1]   = (uint)(oldVertCount + 2 * i + 1);
                 p.VertCount  = 2;
                 p.Flags      = 0x0001; // NavTerrainFlag.Walk
                 // AreaAndType: upper 2 bits = poly type, lower 6 bits = area
@@ -350,7 +350,7 @@ namespace MeshViewer3D.Core
                     Start  = customs[i].Start,
                     End    = customs[i].End,
                     Radius = radius,
-                    Poly   = (ushort)(oldPolyCount + i), // index of the new poly
+                    Poly   = (ushort)(oldPolyCount + i), // index of the new poly (ushort is fine for tile-local)
                     Flags  = customs[i].IsBidirectional ? OffMeshConnection.FLAG_BIDIRECTIONAL : (byte)0,
                     Side   = 0xFF,         // DT_CONN_SIDE: no preferred side (matches HB)
                     UserId = 0xFFFFFFFF    // matches HB binary extraction

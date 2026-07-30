@@ -11,8 +11,10 @@ namespace MeshViewer3D.Data
         public uint FirstLink;          // Index du premier lien dans la liste de liens
 
         // Geometry (24 bytes)
-        public ushort[] Verts;          // 6 indices de vertices (12 bytes)
-        public ushort[] Neis;           // 6 indices de neighbors (12 bytes)
+        // Indices are stored as uint to support merged multi-tile navmeshes without
+        // the 65k ushort vertex-index cap. On-disk .mmtile still uses 16-bit (read/write cast).
+        public uint[] Verts;            // 6 indices de vertices (24 bytes on disk × uint stride)
+        public uint[] Neis;             // 6 indices de neighbors (24 bytes on disk × uint stride)
 
         // Metadata (4 bytes)
         public ushort Flags;            // Flags de polygone (walkable, swim, etc.)
@@ -63,8 +65,8 @@ namespace MeshViewer3D.Data
         {
             return new NavPoly
             {
-                Verts = new ushort[MAX_VERTS],
-                Neis = new ushort[MAX_VERTS]
+                Verts = new uint[MAX_VERTS],
+                Neis = new uint[MAX_VERTS]
             };
         }
     }

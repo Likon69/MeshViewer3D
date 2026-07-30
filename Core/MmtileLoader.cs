@@ -294,7 +294,7 @@ namespace MeshViewer3D.Core
                 // 6 vertex indices (12 bytes)
                 for (int j = 0; j < NavPoly.MAX_VERTS; j++)
                     polys[i].Verts[j] = br.ReadUInt16();
-                
+
                 // 6 neighbor indices (12 bytes)
                 for (int j = 0; j < NavPoly.MAX_VERTS; j++)
                     polys[i].Neis[j] = br.ReadUInt16();

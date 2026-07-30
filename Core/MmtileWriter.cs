@@ -136,6 +136,9 @@ namespace MeshViewer3D.Core
         /// <summary>
         /// Writes polygons (32 bytes each) — exact mirror of ReadPolys.
         /// This is where blackspot modifications (AreaAndType changes) are persisted.
+        /// On-disk format still uses 16-bit indices (Detour native). If any value exceeds
+        /// the ushort range (only possible after merging many tiles), the writer throws —
+        /// saving a merged continent back as a single .mmtile is not supported.
         /// </summary>
         private static void WritePolys(BinaryWriter bw, NavPoly[] polys)
         {
@@ -143,13 +146,27 @@ namespace MeshViewer3D.Core
             {
                 bw.Write(polys[i].FirstLink);
 
-                // 6 vertex indices (12 bytes)
+                // 6 vertex indices (12 bytes) — cast uint → ushort with range check
                 for (int j = 0; j < NavPoly.MAX_VERTS; j++)
-                    bw.Write(polys[i].Verts[j]);
+                {
+                    uint v = polys[i].Verts[j];
+                    if (v > ushort.MaxValue)
+                        throw new InvalidOperationException(
+                            $"Cannot save tile: vertex index {v} at poly {i}.Verts[{j}] exceeds ushort range (65535). " +
+                            "This mesh was produced by merging multiple tiles and cannot be written back as a single .mmtile.");
+                    bw.Write((ushort)v);
+                }
 
-                // 6 neighbor indices (12 bytes)
+                // 6 neighbor indices (12 bytes) — same range check
                 for (int j = 0; j < NavPoly.MAX_VERTS; j++)
-                    bw.Write(polys[i].Neis[j]);
+                {
+                    uint n = polys[i].Neis[j];
+                    if (n > ushort.MaxValue)
+                        throw new InvalidOperationException(
+                            $"Cannot save tile: neighbor index {n} at poly {i}.Neis[{j}] exceeds ushort range (65535). " +
+                            "This mesh was produced by merging multiple tiles and cannot be written back as a single .mmtile.");
+                    bw.Write((ushort)n);
+                }
 
                 bw.Write(polys[i].Flags);
                 bw.Write(polys[i].VertCount);

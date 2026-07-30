@@ -135,5 +135,17 @@ namespace MeshViewer3D.Core
         {
             return $"{mapId:D3}{tileY:D2}{tileX:D2}.mmtile";
         }
+
+        /// <summary>
+        /// Formats a WoW-space coordinate in the offmesh.txt extractor format: "(X Y Z)".
+        /// Space-separated components, parens, 7 significant digits — matches what
+        /// extractor-csharp's OffMeshConnection regex expects and what users copy-paste
+        /// into their offmesh.txt directly. Use <see cref="DetourToWow"/> first if
+        /// your point is in Detour space.
+        /// </summary>
+        public static string FormatOffMeshCoord(Vector3 wow)
+        {
+            return $"({wow.X:G7} {wow.Y:G7} {wow.Z:G7})";
+        }
     }
 }

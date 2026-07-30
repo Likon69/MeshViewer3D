@@ -12,8 +12,9 @@ namespace MeshViewer3D.Core
     /// </summary>
     public class NavMeshData
     {
-        // Keep a small headroom under ushort max to avoid accidental overflow when editing/rebaking.
-        public const int MaxMergeVertexCount = 65000;
+        // No hard vertex cap anymore — indices are uint (see NavPoly.Verts/Neis).
+        // Kept as a soft sanity check for the OLD ushort path (no longer reachable).
+        public const int MaxMergeVertexCount = int.MaxValue;
 
         // Identification
         public string FilePath { get; set; } = string.Empty;
@@ -164,8 +165,8 @@ namespace MeshViewer3D.Core
                 // Pour chaque edge du polygon
                 for (int j = 0; j < poly.VertCount; j++)
                 {
-                    int v0 = poly.Verts[j];
-                    int v1 = poly.Verts[(j + 1) % poly.VertCount];
+                    int v0 = (int)poly.Verts[j];
+                    int v1 = (int)poly.Verts[(j + 1) % poly.VertCount];
 
                     // Éviter les doublons (edge A-B = edge B-A)
                     var edge = v0 < v1 ? (v0, v1) : (v1, v0);
@@ -231,13 +232,10 @@ namespace MeshViewer3D.Core
             if (list.Count == 0) throw new ArgumentException("Cannot merge empty tile list", nameof(tiles));
             if (list.Count == 1) return list[0];
 
-            // Safety check: ushort indices max 65535 — abort instead of silently producing corrupt geometry
+            // No hard cap anymore — NavPoly.Verts/Neis are uint. The merge produces a
+            // in-memory representation that can address any number of vertices/polys.
             int totalVerts = 0;
             foreach (var t in list) totalVerts += t.Vertices.Length;
-            if (totalVerts > MaxMergeVertexCount)
-                throw new InvalidOperationException(
-                    $"Cannot merge {list.Count} tiles: {totalVerts} total vertices exceed the ushort index limit ({MaxMergeVertexCount}). " +
-                    "Load fewer tiles at once.");
 
             var mergedVerts = new List<Vector3>(totalVerts);
             var mergedPolys = new List<NavPoly>();
@@ -265,21 +263,21 @@ namespace MeshViewer3D.Core
                 foreach (var poly in tile.Polys)
                 {
                     int mergedPolyIdx = mergedPolys.Count;
-                    // NavPoly.Verts and Neis are ushort[] (reference type) — must deep-copy before offsetting
+                    // NavPoly.Verts and Neis are uint[] (reference type) — must deep-copy before offsetting
                     var newPoly = poly;
-                    newPoly.Verts = (ushort[])poly.Verts.Clone();
-                    newPoly.Neis = (ushort[])poly.Neis.Clone();
+                    newPoly.Verts = (uint[])poly.Verts.Clone();
+                    newPoly.Neis = (uint[])poly.Neis.Clone();
                     for (int i = 0; i < newPoly.VertCount; i++)
-                        newPoly.Verts[i] = (ushort)(newPoly.Verts[i] + vertOffset);
+                        newPoly.Verts[i] = newPoly.Verts[i] + (uint)vertOffset;
                     // Offset neighbor indices: Detour stores polyIdx+1 (0=no neighbor, ≥0x8000=external)
                     for (int i = 0; i < newPoly.VertCount; i++)
                     {
-                        ushort nei = newPoly.Neis[i];
+                        uint nei = newPoly.Neis[i];
                         if (nei != 0 && (nei & 0x8000) == 0)
                         {
-                            int offsetIdx = nei - 1 + polyOffset;
+                            int offsetIdx = (int)nei - 1 + polyOffset;
                             if (offsetIdx >= 0 && offsetIdx < mergedPolys.Count + tile.Polys.Length)
-                                newPoly.Neis[i] = (ushort)(nei + polyOffset);
+                                newPoly.Neis[i] = nei + (uint)polyOffset;
                             else
                                 newPoly.Neis[i] = 0; // Invalid neighbor — block link
                         }
@@ -329,7 +327,7 @@ namespace MeshViewer3D.Core
             foreach (var (polyIdx, edgeIdx) in externalEdges)
             {
                 if (polysArray[polyIdx].Neis[edgeIdx] == 0)
-                    polysArray[polyIdx].Neis[edgeIdx] = 0x8001;
+                    polysArray[polyIdx].Neis[edgeIdx] = 0x8001u;
             }
 
             var mergedHeader = list[0].Header;
@@ -417,8 +415,8 @@ namespace MeshViewer3D.Core
                     if (matchDirect || matchFlipped)
                     {
                         // Reconnect: Detour Neis stores polyIdx+1
-                        polys[piA].Neis[eiA] = (ushort)(piB + 1);
-                        polys[piB].Neis[eiB] = (ushort)(piA + 1);
+                        polys[piA].Neis[eiA] = (uint)(piB + 1);
+                        polys[piB].Neis[eiB] = (uint)(piA + 1);
                         break;
                     }
                 }

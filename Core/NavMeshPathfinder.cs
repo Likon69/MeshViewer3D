@@ -58,10 +58,10 @@ namespace MeshViewer3D.Core
                 // Standard Neis[] neighbor traversal
                 for (int e = 0; e < poly.VertCount; e++)
                 {
-                    ushort nei = poly.Neis[e];
+                    uint nei = poly.Neis[e];
                     if (nei == 0 || (nei & 0x8000) != 0) continue;
 
-                    int neighborIdx = nei - 1; // Detour: neis stores polyIdx + 1
+                    int neighborIdx = (int)nei - 1; // Detour: neis stores polyIdx + 1
                     if (neighborIdx < 0 || neighborIdx >= polyCount) continue;
                     if (visited[neighborIdx]) continue;
                     if (!mesh.Polys[neighborIdx].IsWalkable()) continue;
@@ -457,16 +457,16 @@ namespace MeshViewer3D.Core
             for (int ea = 0; ea < pA.VertCount; ea++)
             {
                 int ea2 = (ea + 1) % pA.VertCount;
-                ushort va0 = pA.Verts[ea];
-                ushort va1 = pA.Verts[ea2];
+                uint va0 = pA.Verts[ea];
+                uint va1 = pA.Verts[ea2];
                 var posA0 = mesh.Vertices[va0];
                 var posA1 = mesh.Vertices[va1];
 
                 for (int eb = 0; eb < pB.VertCount; eb++)
                 {
                     int eb2 = (eb + 1) % pB.VertCount;
-                    ushort vb0 = pB.Verts[eb];
-                    ushort vb1 = pB.Verts[eb2];
+                    uint vb0 = pB.Verts[eb];
+                    uint vb1 = pB.Verts[eb2];
 
                     // Fast path: exact index match (same-tile polys always share vertex indices)
                     if ((va0 == vb0 && va1 == vb1) || (va0 == vb1 && va1 == vb0))

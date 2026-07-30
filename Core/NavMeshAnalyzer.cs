@@ -44,9 +44,9 @@ namespace MeshViewer3D.Core
 
                     for (int e = 0; e < poly.VertCount; e++)
                     {
-                        ushort nei = poly.Neis[e];
+                        uint nei = poly.Neis[e];
                         if (nei == 0 || (nei & 0x8000) != 0) continue;
-                        int neighborIdx = nei - 1;
+                        int neighborIdx = (int)nei - 1;
                         if (neighborIdx < 0 || neighborIdx >= polyCount) continue;
                         if (component[neighborIdx] != -1) continue;
                         if (!mesh.Polys[neighborIdx].IsWalkable()) continue;

@@ -18,7 +18,10 @@ namespace MeshViewer3D.Rendering
         // Projection settings
         public float FieldOfView { get; set; } = MathHelper.DegreesToRadians(45f);
         public float NearPlane { get; set; } = 0.5f;
-        public float FarPlane { get; set; } = 50000f;
+        // Far plane must accommodate the biggest scene the user might frame into view — a full
+        // 64×64 continent tileset needs the camera ~40km out to fit the diagonal. Default
+        // bumped to 200km so FrameBounds() at any reasonable zoom level stays inside the frustum.
+        public float FarPlane { get; set; } = 200000f;
 
         // Backward compatibility with existing UI options
         public bool FreeCameraMode { get; set; } = false;
@@ -130,6 +133,13 @@ namespace MeshViewer3D.Rendering
             Target = (bMin + bMax) * 0.5f;
             float radius = (bMax - bMin).Length * 0.5f;
             Distance = Math.Max((radius / MathF.Sin(FieldOfView * 0.5f)) * marginFactor, MinDist);
+
+            // Position the camera directly above the bounds center, looking straight down.
+            // For top-down viewing the previous orbit yaw/pitch doesn't matter — reset to
+            // a stable orientation so the user always sees the scene from above regardless
+            // of where the camera was before the load.
+            Yaw = 0f;
+            Pitch = -MaxPitch;
         }
 
         public void SetFrontView() => (Yaw, Pitch) = (-MathHelper.PiOver2, 0f);

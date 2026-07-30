@@ -299,8 +299,8 @@ namespace MeshViewer3D.Rendering
 
                     for (int i = 0; i < poly.VertCount; i++)
                     {
-                        int ia = poly.Verts[i];
-                        int ib = poly.Verts[(i + 1) % poly.VertCount];
+                        int ia = (int)poly.Verts[i];
+                        int ib = (int)poly.Verts[(i + 1) % poly.VertCount];
                         if (ia >= tile.Vertices.Length || ib >= tile.Vertices.Length) continue;
 
                         var va = tile.Vertices[ia];
@@ -933,7 +933,7 @@ namespace MeshViewer3D.Rendering
             var projection = Matrix4.CreatePerspectiveFieldOfView(
                 camera.FieldOfView,
                 (float)viewportWidth / viewportHeight,
-                1f, 10000f
+                1f, camera.FarPlane
             );
 
             // Render terrain heightmap — independent of navmesh fill toggle.

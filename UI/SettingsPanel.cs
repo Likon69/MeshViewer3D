@@ -105,7 +105,7 @@ namespace MeshViewer3D.UI
             this.Controls.Add(_chkVolumes);
             y += 22;
 
-            _chkTerrain = CreateCheckBox("Terrain Heightmap", y, true);
+            _chkTerrain = CreateCheckBox("Terrain Heightmap", y, false);
             _chkTerrain.CheckedChanged += (s, e) => TerrainChanged?.Invoke(this, _chkTerrain.Checked);
             this.Controls.Add(_chkTerrain);
             y += 22;
