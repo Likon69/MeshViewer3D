@@ -1202,56 +1202,9 @@ namespace MeshViewer3D.UI
                 return;
             }
 
-            // If we exceed the ushort-based merge limit, either fail (manual selection) or pick a compact subset (folder load).
-            int totalVerts = 0;
-            foreach (var m in allMeshes) totalVerts += m.Vertices.Length;
-
-            var meshesToMerge = allMeshes;
-            if (totalVerts > NavMeshData.MaxMergeVertexCount)
-            {
-                if (!allowAutoSubset)
-                {
-                    _console?.LogError(
-                        $"Cannot load {allMeshes.Count} selected tiles: {totalVerts} total vertices exceed merge limit " +
-                        $"({NavMeshData.MaxMergeVertexCount}). Select fewer tiles.");
-                    return;
-                }
-
-                float centerX = (float)allMeshes.Average(m => m.TileX);
-                float centerY = (float)allMeshes.Average(m => m.TileY);
-
-                meshesToMerge = allMeshes
-                    .OrderBy(m =>
-                    {
-                        float dx = m.TileX - centerX;
-                        float dy = m.TileY - centerY;
-                        return dx * dx + dy * dy;
-                    })
-                    .ToList();
-
-                int runningVerts = 0;
-                var selected = new List<NavMeshData>();
-                foreach (var mesh in meshesToMerge)
-                {
-                    if (runningVerts + mesh.Vertices.Length > NavMeshData.MaxMergeVertexCount)
-                        continue;
-
-                    selected.Add(mesh);
-                    runningVerts += mesh.Vertices.Length;
-                }
-
-                if (selected.Count == 0)
-                {
-                    _console?.LogError($"Cannot load tiles: even a single tile exceeds merge limit ({NavMeshData.MaxMergeVertexCount}).");
-                    _minimap?.Clear();
-                    return;
-                }
-
-                meshesToMerge = selected;
-                _console?.LogWarning(
-                    $"Total vertices ({totalVerts}) exceed merge limit ({NavMeshData.MaxMergeVertexCount}). " +
-                    $"Loaded nearest subset: {meshesToMerge.Count}/{allMeshes.Count} tiles ({runningVerts} verts).");
-            }
+            // No auto-subset fallback anymore — NavPoly indices are uint now,
+            // so any number of tiles can be merged into one NavMeshData.
+            _ = allowAutoSubset; // kept in signature for backward-compat with OnLoadTiles callers
 
             _minimap?.Clear();
             foreach (var mesh in allMeshes)
@@ -1261,23 +1214,22 @@ namespace MeshViewer3D.UI
             foreach (var mesh in allMeshes)
                 _loadedTileCoords.Add((mesh.TileX, mesh.TileY));
 
-            _currentMesh = NavMeshData.Merge(meshesToMerge);
+            // Merge every loaded tile into one NavMeshData. Vertex/poly indices are uint now,
+            // so there is no 65k cap and no auto-subset fallback needed.
+            _currentMesh = NavMeshData.Merge(allMeshes);
             _renderer?.LoadMesh(_currentMesh);
-            _renderer?.LoadTileSeams(meshesToMerge);
+            _renderer?.LoadTileSeams(allMeshes);
             _cameraController?.FrameScene();
             _minimap?.SetCurrentTile(_currentMesh.TileX, _currentMesh.TileY);
 
-            _console?.LogSuccess($"Loaded {meshesToMerge.Count} tiles" +
+            _console?.LogSuccess($"Loaded {allMeshes.Count} tiles" +
                 (failed > 0 ? $" ({failed} failed)" : string.Empty) +
                 $" — {_currentMesh.Polys.Length} polys, {_currentMesh.Vertices.Length} verts");
 
-            if (meshesToMerge.Count != allMeshes.Count)
-            {
-                _console?.LogWarning(
-                    $"NavMesh render is limited to {meshesToMerge.Count}/{allMeshes.Count} tiles due to vertex index limits, " +
-                    "but terrain and world objects will still load for all selected tiles.");
-            }
-
+            // Always auto-load WMO/M2 objects after navmesh load — they're cheap (just MODF/MDDF
+            // placement entries, no per-vertex data). The Terrain Heightmap checkbox in Settings
+            // controls ONLY the heightmap (250k+ verts/ADT = 25M+ verts total). When the checkbox
+            // is OFF (default for continent loads), skip the terrain part inside TryLoadWorldObjects.
             TryLoadWorldObjects();
         }
 
@@ -1366,7 +1318,12 @@ namespace MeshViewer3D.UI
                     }
 
                     _renderer.LoadWorldObjects(provider, adt, clearExisting: false);
-                    _renderer.LoadTerrain(adt, provider, mapDir, includeAdjacentTiles: false, clearExisting: false);
+
+                    // Skip terrain heightmap when the user has the Terrain checkbox OFF — that's
+                    // the expensive part (~37k verts per ADT × N tiles = multi-second blocking I/O).
+                    // WMO/M2 objects above are still loaded unconditionally.
+                    if (_settingsPanel == null || _settingsPanel.ShowTerrain)
+                        _renderer.LoadTerrain(adt, provider, mapDir, includeAdjacentTiles: false, clearExisting: false);
 
                     adtLoaded++;
                     totalWmoPlacements += adt.WmoInstances.Length;
@@ -1804,7 +1761,7 @@ namespace MeshViewer3D.UI
                     
                     var wowPos = CoordinateSystem.DetourToWow(closestHit);
                     bool isStart = _jumpLinksPanel.PendingStartPoint == null;
-                    _console?.Log($"Jump Link point placed at WoW [{wowPos.X:F1}, {wowPos.Y:F1}, {wowPos.Z:F1}] ({(isStart ? "Start" : "End")})");
+                    _console?.Log($"Jump Link point placed at WoW {CoordinateSystem.FormatOffMeshCoord(wowPos)} ({(isStart ? "Start" : "End")})");
                 }
                 else
                 {
@@ -1944,7 +1901,7 @@ namespace MeshViewer3D.UI
                     _renderer?.TriggerBlackspotFlash(newIndex);
                     
                     var wowPos = CoordinateSystem.DetourToWow(closestHit);
-                    _console?.LogSuccess($"Blackspot placed at [{wowPos.X:F1}, {wowPos.Y:F1}, {wowPos.Z:F1}]");
+                    _console?.LogSuccess($"Blackspot placed at {CoordinateSystem.FormatOffMeshCoord(wowPos)}");
                 }
                 else
                 {
@@ -2017,7 +1974,7 @@ namespace MeshViewer3D.UI
 
                     var wowPos = CoordinateSystem.DetourToWow(closestHit);
                     int count = _volumesPanel.InProgressVertices.Count;
-                    _console?.Log($"Volume vertex {count} placed at [{wowPos.X:F1}, {wowPos.Y:F1}, {wowPos.Z:F1}]");
+                    _console?.Log($"Volume vertex {count} placed at {CoordinateSystem.FormatOffMeshCoord(wowPos)}");
                 }
                 else
                 {
@@ -2145,7 +2102,7 @@ namespace MeshViewer3D.UI
                     
                     var bs = _editableElements.Blackspots[closestIndex];
                     var wowPos = CoordinateSystem.DetourToWow(bs.Location);
-                    _console?.Log($"Selected: {bs.Name} [{wowPos.X:F1}, {wowPos.Y:F1}, {wowPos.Z:F1}]");
+                    _console?.Log($"Selected: {bs.Name} {CoordinateSystem.FormatOffMeshCoord(wowPos)}");
                 }
                 else
                 {
@@ -2184,7 +2141,7 @@ namespace MeshViewer3D.UI
                     var (tileX, tileY) = CoordinateSystem.WorldToTile(wowHit);
                     byte area = _currentMesh.Polys[_raytraceHitPolyIndex].Area;
                     string areaName = Data.AreaTypeInfo.GetName(area);
-                    modeText += $"\n[RAYTRACE] {{{wowHit.X:G7}, {wowHit.Y:G7}, {wowHit.Z:G7}}} | Tile: {{{tileX}, {tileY}}} | Poly #{_raytraceHitPolyIndex} | {areaName} ({area})";
+                    modeText += $"\n[RAYTRACE] {CoordinateSystem.FormatOffMeshCoord(wowHit)} | Tile: ({tileX},{tileY}) | Poly #{_raytraceHitPolyIndex} | {areaName} ({area})";
                 }
                 else if (_raytraceMode)
                 {
@@ -2215,12 +2172,12 @@ namespace MeshViewer3D.UI
                     else if (_testNavStartPoint.HasValue && _testNavEndPoint == null)
                     {
                         var ws = CoordinateSystem.DetourToWow(_testNavStartPoint.Value);
-                        modeText += $"\n[TEST NAV] Start: {{{ws.X:F1}, {ws.Y:F1}, {ws.Z:F1}}} — Click end point";
+                        modeText += $"\n[TEST NAV] Start: {CoordinateSystem.FormatOffMeshCoord(ws)} — Click end point";
                     }
                     else if (!_testNavStartPoint.HasValue && _testNavEndPoint.HasValue)
                     {
                         var we = CoordinateSystem.DetourToWow(_testNavEndPoint.Value);
-                        modeText += $"\n[TEST NAV] End: {{{we.X:F1}, {we.Y:F1}, {we.Z:F1}}} — Shift+Click start point";
+                        modeText += $"\n[TEST NAV] End: {CoordinateSystem.FormatOffMeshCoord(we)} — Shift+Click start point";
                     }
                     else if (_testNavStartPoint == null)
                     {
@@ -2232,8 +2189,8 @@ namespace MeshViewer3D.UI
                 string mapLabel = mapName != null ? $"{mapName} (ID {_currentMesh.MapId})" : $"Map {_currentMesh.MapId}";
 
                 _overlayLabel.Text = $"{mapLabel}\n" +
-                                     $"Target: {{{wowTarget.X:F1}, {wowTarget.Y:F1}, {wowTarget.Z:F1}}}\n" +
-                                     $"Eye: {{{wowEye.X:F1}, {wowEye.Y:F1}, {wowEye.Z:F1}}}\n" +
+                                     $"Target: {CoordinateSystem.FormatOffMeshCoord(wowTarget)}\n" +
+                                     $"Eye: {CoordinateSystem.FormatOffMeshCoord(wowEye)}\n" +
                                      $"Tile: ({camTileX}, {camTileY})\n" +
                                      $"Polys: {_currentMesh.Polys.Length} | Verts: {_currentMesh.Vertices.Length}\n" +
                                      $"Blackspots: {_editableElements.Blackspots.Count} | Volumes: {_editableElements.ConvexVolumes.Count}\n" +
@@ -2790,7 +2747,7 @@ namespace MeshViewer3D.UI
                     _testNavStartPolyIndex = closestPolyIndex;
 
                     byte area = _currentMesh.Polys[closestPolyIndex].Area;
-                    _console?.LogSuccess($"Start: [{wowHit.X:G7}, {wowHit.Y:G7}, {wowHit.Z:G7}] Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)})");
+                    _console?.LogSuccess($"Start: {CoordinateSystem.FormatOffMeshCoord(wowHit)} Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)})");
 
                     RecalculateTestNavigationPath();
 
@@ -2803,7 +2760,7 @@ namespace MeshViewer3D.UI
                     _testNavEndPolyIndex = closestPolyIndex;
 
                     byte area = _currentMesh.Polys[closestPolyIndex].Area;
-                    _console?.Log($"End: [{wowHit.X:G7}, {wowHit.Y:G7}, {wowHit.Z:G7}] Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)})");
+                    _console?.Log($"End: {CoordinateSystem.FormatOffMeshCoord(wowHit)} Poly #{closestPolyIndex} ({Data.AreaTypeInfo.GetName(area)})");
 
                     RecalculateTestNavigationPath();
 
