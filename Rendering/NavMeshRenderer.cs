@@ -1308,15 +1308,17 @@ namespace MeshViewer3D.Rendering
                     wmoRenderer.Render(view, projection, _meshShader!);
                 }
 
-                if (_instancedShader != null)
+                if (_instancedShader != null && _wmoInstancedRenderers.Count > 0)
                 {
+                    BindInstancedShader(view, projection);
                     foreach (var inst in _wmoInstancedRenderers)
                     {
                         if (_wmoBlacklist.Count > 0 && _wmoBlacklist.Contains(inst.Name))
                             continue;
                         if (!frustum.IntersectsAabb(inst.BoundsMin, inst.BoundsMax)) continue;
-                        inst.Render(view, projection, _instancedShader);
+                        inst.Draw();
                     }
+                    GL.BindVertexArray(0);
                 }
 
                 GL.DepthMask(true);
@@ -1336,13 +1338,15 @@ namespace MeshViewer3D.Rendering
                     m2Renderer.Render(view, projection, _meshShader!);
                 }
 
-                if (_instancedShader != null)
+                if (_instancedShader != null && _m2InstancedRenderers.Count > 0)
                 {
+                    BindInstancedShader(view, projection);
                     foreach (var inst in _m2InstancedRenderers)
                     {
                         if (!frustum.IntersectsAabb(inst.BoundsMin, inst.BoundsMax)) continue;
-                        inst.Render(view, projection, _instancedShader);
+                        inst.Draw();
                     }
+                    GL.BindVertexArray(0);
                 }
 
                 GL.DepthMask(true);
@@ -1452,6 +1456,15 @@ namespace MeshViewer3D.Rendering
             get => _showTerrain;
             set => _showTerrain = value;
         }
+
+        /// <summary>Number of ADT tiles with terrain geometry currently uploaded to the GPU.</summary>
+        public int TerrainTileCount => _terrainRenderers.Count;
+
+        /// <summary>Number of WMO renderers currently uploaded to the GPU (single + instanced).</summary>
+        public int WmoObjectCount => _wmoRenderers.Count + _wmoInstancedRenderers.Count;
+
+        /// <summary>Number of M2 renderers currently uploaded to the GPU (single + instanced).</summary>
+        public int M2ObjectCount => _m2Renderers.Count + _m2InstancedRenderers.Count;
 
         public int WireAlpha
         {
@@ -1726,11 +1739,22 @@ namespace MeshViewer3D.Rendering
         /// Loads WMO/M2 objects from one ADT tile using the WoW data provider.
         /// When clearExisting is true, previously loaded world object renderers are cleared first.
         /// </summary>
-        public void LoadWorldObjects(WowDataProvider dataProvider, AdtFile adt, bool clearExisting = true)
+        public void LoadWorldObjects(WowDataProvider dataProvider, AdtFile adt, bool clearExisting = true,
+                                     bool loadWmo = true, bool loadM2 = true)
         {
             Vector3? meshCenter = _currentMesh?.GetCenterDetour();
             const float placementSwitchThreshold = 1800f;
 
+            if (loadWmo)
+                LoadWmoObjects(dataProvider, adt, clearExisting, meshCenter, placementSwitchThreshold);
+
+            if (loadM2)
+                LoadM2Objects(dataProvider, adt, clearExisting, meshCenter, placementSwitchThreshold);
+        }
+
+        private void LoadWmoObjects(WowDataProvider dataProvider, AdtFile adt, bool clearExisting,
+                                    Vector3? meshCenter, float placementSwitchThreshold)
+        {
             if (clearExisting)
             {
                 foreach (var r in _wmoRenderers) r.Dispose();
@@ -1798,8 +1822,11 @@ namespace MeshViewer3D.Rendering
                 }
             }
             Console.WriteLine($"  WMO TOTAL: {_wmoRenderers.Count} single + {_wmoInstancedRenderers.Count} instanced");
+        }
 
-            // ── M2 doodad loading ──────────────────────────────────────────
+        private void LoadM2Objects(WowDataProvider dataProvider, AdtFile adt, bool clearExisting,
+                                   Vector3? meshCenter, float placementSwitchThreshold)
+        {
             if (clearExisting)
             {
                 foreach (var r in _m2Renderers) r.Dispose();
@@ -1961,9 +1988,6 @@ namespace MeshViewer3D.Rendering
         /// <param name="includeAdjacentTiles">True to include surrounding 8 tiles (3x3), false for center tile only.</param>
         public void LoadTerrain(AdtFile adt, WowDataProvider? provider = null, string? mapDir = null, bool includeAdjacentTiles = false, bool clearExisting = true)
         {
-            foreach (var r in _terrainRenderers) r.Dispose();
-            _terrainRenderers.Clear();
-
             if (clearExisting)
             {
                 foreach (var r in _terrainRenderers) r.Dispose();
@@ -2053,6 +2077,21 @@ namespace MeshViewer3D.Rendering
             }
             else
                 Log("Terrain: no MCNK data found in ADT, skipping");
+        }
+
+        /// <summary>
+        /// Binds the instanced shader and uploads the uniforms shared by every instanced batch,
+        /// so the per-object loop below is nothing but VAO binds and draw calls.
+        /// </summary>
+        private void BindInstancedShader(Matrix4 view, Matrix4 projection)
+        {
+            if (_instancedShader == null) return;
+            _instancedShader.Use();
+            _instancedShader.SetMatrix4("uView", view);
+            _instancedShader.SetMatrix4("uProjection", projection);
+            _instancedShader.SetBool("uEnableLighting", true);
+            _instancedShader.SetBool("uEnableFog", false);
+            _instancedShader.SetFloat("uAlpha", 0.65f);
         }
 
         // ── WMO instancing helpers (additive, do not modify WmoRenderer) ────

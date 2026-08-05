@@ -54,10 +54,26 @@ namespace MeshViewer3D.UI
         private Core.NavMeshRaycastIndex? _raycastIndex;
         private Dictionary<int, List<(int targetPoly, int offMeshIdx)>>? _offMeshLookup;
         private readonly List<(int TileX, int TileY)> _loadedTileCoords = new();
+
+        /// <summary>Tile count up to which WMO, M2 and terrain are all loaded automatically.</summary>
+        private const int SceneAutoLoadTileLimit = 50;
+
+        /// <summary>Set while the load path drives the scene checkboxes itself, to avoid a double load.</summary>
+        private bool _suppressSceneReload;
         private EditableElements _editableElements = new();
         private DateTime _lastFrameTime = DateTime.Now;
         private System.Diagnostics.Stopwatch _frameStopwatch = System.Diagnostics.Stopwatch.StartNew();
         private const double TargetFrameMs = 1000.0 / 60.0; // 60 FPS hard cap
+
+        /// <summary>Longest gap between repaints when nothing changed — catches any missed redraw request.</summary>
+        private const int IdleRedrawMs = 250;
+
+        /// <summary>How long after the last input the viewport keeps rendering at full rate.</summary>
+        private const int InteractionActiveMs = 400;
+
+        private bool _needsRedraw = true;
+        private readonly System.Diagnostics.Stopwatch _idleHeartbeat = System.Diagnostics.Stopwatch.StartNew();
+        private readonly System.Diagnostics.Stopwatch _lastInteraction = System.Diagnostics.Stopwatch.StartNew();
         private float _fps;
         private bool _blackspotClickMode = false;
         private bool _jumpLinkClickMode = false;
@@ -138,11 +154,13 @@ namespace MeshViewer3D.UI
         private void MainForm_KeyUp(object? sender, KeyEventArgs e)
         {
             _pressedKeys.Remove(e.KeyCode);
+            _lastInteraction.Restart();
         }
-        
+
         private void MainForm_KeyDown(object? sender, KeyEventArgs e)
         {
             _pressedKeys.Add(e.KeyCode);
+            _lastInteraction.Restart();
 
             if (_cameraController != null && _cameraController.OnKeyDown(e))
             {
@@ -580,7 +598,7 @@ namespace MeshViewer3D.UI
             _settingsPanel.OffMeshChanged     += (s, e) => { if (_renderer != null) _renderer.ShowOffMesh      = e; };
             _settingsPanel.BlackspotsChanged  += (s, e) => { if (_renderer != null) _renderer.ShowBlackspots   = e; };
             _settingsPanel.VolumesChanged     += (s, e) => { if (_renderer != null) _renderer.ShowVolumes      = e; };
-            _settingsPanel.TerrainChanged     += (s, e) => { if (_renderer != null) _renderer.ShowTerrain      = e; };
+            _settingsPanel.TerrainChanged     += (s, e) => OnTerrainToggled(e);
             _settingsPanel.ColorModeChanged   += (s, mode) => { if (_renderer != null) _renderer.ColorMode = mode; _console?.Log($"Color mode: {mode}"); };
             _settingsPanel.WireframeAlphaChanged += (s, v) => { if (_renderer != null) _renderer.WireAlpha = v; };
             _settingsPanel.MeshAlphaChanged   += (s, v) => { if (_renderer != null) _renderer.MeshFillAlpha = v / 100f; };
@@ -625,8 +643,8 @@ namespace MeshViewer3D.UI
 
             // Onglet Objects (WMO/M2 viewer)
             _gameObjectPanel = new GameObjectPanel();
-            _gameObjectPanel.WmoVisibilityChanged += v => { if (_renderer != null) _renderer.ShowWmoObjects = v; };
-            _gameObjectPanel.M2VisibilityChanged += v => { if (_renderer != null) _renderer.ShowM2Objects = v; };
+            _gameObjectPanel.WmoVisibilityChanged += OnWmoToggled;
+            _gameObjectPanel.M2VisibilityChanged += OnM2Toggled;
             _gameObjectPanel.BakeRequested += OnBakeObjects;
             _gameObjectPanel.UnbakeRequested += OnUnbakeObjects;
             var objectsTab = new TabPage("Objects") { BackColor = Color.FromArgb(37, 37, 38) };
@@ -669,6 +687,13 @@ namespace MeshViewer3D.UI
             _glControl.MouseWheel += GlControl_MouseWheel;
             _glControl.MouseEnter += GlControl_MouseEnter;
             _glControl.MouseLeave += GlControl_MouseLeave;
+
+            // Any viewport input keeps the render loop at full rate for InteractionActiveMs.
+            // The camera handlers mutate state without requesting a repaint themselves.
+            _glControl.MouseMove  += (_, _) => _lastInteraction.Restart();
+            _glControl.MouseDown  += (_, _) => _lastInteraction.Restart();
+            _glControl.MouseUp    += (_, _) => _lastInteraction.Restart();
+            _glControl.MouseWheel += (_, _) => _lastInteraction.Restart();
 
             // ── Layout with resizable SplitContainers ─────────────────────────
             // splitViewport: top = GLControl, bottom = Console (horizontal splitter)
@@ -774,15 +799,21 @@ namespace MeshViewer3D.UI
 
             _console.Log("MeshViewer3D initialized. Quality: Honorbuddy/Apoc level.");
 
-            // Timer de rendu — interval below 16.67ms so Paint handler always fires often enough.
-            // Actual frame cap is enforced inside GlControl_Paint via _frameStopwatch + TargetFrameMs.
+            // Timer de rendu — polls faster than 60 FPS, but only actually repaints when the
+            // scene changed, the camera is animating, or the idle heartbeat expires. A static
+            // view costs a handful of frames per second instead of a continuous 60.
             _renderTimer = new System.Windows.Forms.Timer
             {
-                Interval = 8  // poll faster than 60 FPS; Paint handler skips excess frames
+                Interval = 8
             };
             _renderTimer.Tick += (s, e) =>
             {
-                if (_glControl != null && _glControl.IsHandleCreated && !_glControl.IsDisposed)
+                if (_glControl == null || !_glControl.IsHandleCreated || _glControl.IsDisposed) return;
+
+                bool animating = _camera.FreeCameraMode
+                              || _pressedKeys.Count > 0
+                              || _lastInteraction.ElapsedMilliseconds < InteractionActiveMs;
+                if (_needsRedraw || animating || _idleHeartbeat.ElapsedMilliseconds >= IdleRedrawMs)
                     _glControl.Invalidate();
             };
             _renderTimer.Start();
@@ -943,12 +974,12 @@ namespace MeshViewer3D.UI
                 return;
 
             // FPS lock: skip the frame if we already rendered within TargetFrameMs.
-            // Without this, the WinForms Timer (16ms = ~62.5 FPS) overshoots the 60 FPS target
-            // and the GPU is fed redundant draw calls every frame.
+            // Re-arming via _needsRedraw rather than Invalidate() — calling Invalidate() here
+            // queues an immediate repaint that is skipped again, spinning the message pump.
             double sinceLast = _frameStopwatch.Elapsed.TotalMilliseconds;
             if (sinceLast < TargetFrameMs - 0.5)
             {
-                _glControl.Invalidate(); // queue another frame at the right time
+                _needsRedraw = true;
                 return;
             }
 
@@ -959,8 +990,11 @@ namespace MeshViewer3D.UI
             var now = DateTime.Now;
             float deltaTime = (float)(now - _lastFrameTime).TotalSeconds;
             _lastFrameTime = now;
-            _fps = deltaTime > 0 ? 1f / deltaTime : 60f;
+            // Idle heartbeat frames are seconds apart; they would drag the readout to ~4 FPS.
+            if (deltaTime > 0 && deltaTime < 0.25f) _fps = 1f / deltaTime;
             _frameStopwatch.Restart();
+            _needsRedraw = false;
+            _idleHeartbeat.Restart();
 
             if (_camera.FreeCameraMode)
                 UpdateFreeCameraMovement(deltaTime);
@@ -1340,17 +1374,43 @@ namespace MeshViewer3D.UI
         }
 
         /// <summary>
-        /// Attempts to load WMO objects from MPQ archives for the currently loaded tile.
-        /// Requires both _wowDataPath and _currentMesh to be set.
+        /// Loads the ADT scene (WMO, M2 and terrain) for the currently loaded tiles.
+        /// At or below <see cref="SceneAutoLoadTileLimit"/> tiles everything is loaded and every
+        /// checkbox is ticked. Above it nothing is loaded and every checkbox is cleared, so the
+        /// user picks what is worth the cost — ticking a box then loads that layer on demand.
         /// </summary>
         private void TryLoadWorldObjects()
         {
             if (_wowDataPath == null || _currentMesh == null || _renderer == null) return;
 
+            int tileCount = _loadedTileCoords.Count > 0 ? _loadedTileCoords.Distinct().Count() : 1;
+            bool autoLoad = tileCount <= SceneAutoLoadTileLimit;
+
+            SetSceneCheckboxes(autoLoad);
+
+            if (!autoLoad)
+            {
+                _renderer.ClearWorldScene();
+                _console?.Log($"{tileCount} tiles loaded — WMO, M2 and terrain left unloaded. " +
+                              "Tick Show WMO / Show M2 (Objects tab) or Terrain Heightmap (Settings) to load them.");
+                return;
+            }
+
+            LoadAdtScene(loadWmo: true, loadM2: true, loadTerrain: true, clearScene: true);
+        }
+
+        /// <summary>
+        /// Reads every loaded tile's ADT and hands the requested layers to the renderer.
+        /// </summary>
+        private void LoadAdtScene(bool loadWmo, bool loadM2, bool loadTerrain, bool clearScene)
+        {
+            if (_wowDataPath == null || _currentMesh == null || _renderer == null) return;
+            if (!loadWmo && !loadM2 && !loadTerrain) return;
+
             string? mapDir = GetMapDirectory(_currentMesh.MapId);
             if (mapDir == null)
             {
-                _console?.LogWarning($"Unknown map ID {_currentMesh.MapId} — cannot load WMO objects");
+                _console?.LogWarning($"Unknown map ID {_currentMesh.MapId} — cannot load ADT scene");
                 return;
             }
 
@@ -1358,7 +1418,14 @@ namespace MeshViewer3D.UI
                 ? _loadedTileCoords.Distinct().ToList()
                 : new List<(int TileX, int TileY)> { (_currentMesh.TileX, _currentMesh.TileY) };
 
-            _console?.Log($"Loading ADT scene for {tilesToLoad.Count} tile(s)...");
+            var layers = new List<string>(3);
+            if (loadWmo) layers.Add("WMO");
+            if (loadM2) layers.Add("M2");
+            if (loadTerrain) layers.Add("terrain");
+            _console?.Log($"Loading {string.Join(" + ", layers)} for {tilesToLoad.Count} tile(s)...");
+
+            var busyCursor = Cursor.Current;
+            Cursor.Current = Cursors.WaitCursor;
 
             try
             {
@@ -1366,9 +1433,11 @@ namespace MeshViewer3D.UI
                 _console?.Log($"[MPQ] {provider.ArchivesLoaded} archives loaded:");
                 foreach (var entry in provider.LoadLog)
                     _console?.Log($"  {entry}");
-                _renderer.ClearWorldScene();
+
+                if (clearScene) _renderer.ClearWorldScene();
 
                 bool panelSeeded = false;
+                bool firstTerrainTile = true;
                 int adtLoaded = 0;
                 int totalWmoPlacements = 0;
 
@@ -1395,13 +1464,16 @@ namespace MeshViewer3D.UI
                         panelSeeded = true;
                     }
 
-                    _renderer.LoadWorldObjects(provider, adt, clearExisting: false);
+                    if (loadWmo || loadM2)
+                        _renderer.LoadWorldObjects(provider, adt, clearExisting: false,
+                            loadWmo: loadWmo, loadM2: loadM2);
 
-                    // Skip terrain heightmap when the user has the Terrain checkbox OFF — that's
-                    // the expensive part (~37k verts per ADT × N tiles = multi-second blocking I/O).
-                    // WMO/M2 objects above are still loaded unconditionally.
-                    if (_settingsPanel == null || _settingsPanel.ShowTerrain)
-                        _renderer.LoadTerrain(adt, provider, mapDir, includeAdjacentTiles: false, clearExisting: false);
+                    if (loadTerrain)
+                    {
+                        _renderer.LoadTerrain(adt, provider, mapDir,
+                            includeAdjacentTiles: false, clearExisting: firstTerrainTile);
+                        firstTerrainTile = false;
+                    }
 
                     adtLoaded++;
                     totalWmoPlacements += adt.WmoInstances.Length;
@@ -1417,8 +1489,76 @@ namespace MeshViewer3D.UI
             }
             catch (Exception ex)
             {
-                _console?.LogError($"Failed to load WMO objects: {ex.Message}");
+                _console?.LogError($"Failed to load ADT scene: {ex.Message}");
             }
+            finally
+            {
+                Cursor.Current = busyCursor;
+                _glControl?.Invalidate();
+            }
+        }
+
+        /// <summary>
+        /// Drives the three scene checkboxes without triggering their on-demand load handlers.
+        /// </summary>
+        private void SetSceneCheckboxes(bool visible)
+        {
+            _suppressSceneReload = true;
+            if (_settingsPanel != null) _settingsPanel.ShowTerrain = visible;
+            if (_gameObjectPanel != null)
+            {
+                _gameObjectPanel.ShowWmo = visible;
+                _gameObjectPanel.ShowM2 = visible;
+            }
+            _suppressSceneReload = false;
+
+            if (_renderer == null) return;
+            _renderer.ShowTerrain = visible;
+            _renderer.ShowWmoObjects = visible;
+            _renderer.ShowM2Objects = visible;
+        }
+
+        /// <summary>
+        /// Handles the Settings > Terrain Heightmap checkbox. Toggling visibility is not enough:
+        /// on a large load the heightmap was never read from the MPQ, so ticking the box has to
+        /// trigger the ADT load itself.
+        /// </summary>
+        private void OnTerrainToggled(bool enabled)
+        {
+            if (_renderer == null) return;
+            _renderer.ShowTerrain = enabled;
+            _glControl?.Invalidate();
+
+            if (!enabled || _suppressSceneReload) return;
+            if (_renderer.TerrainTileCount > 0) return;
+
+            LoadAdtScene(loadWmo: false, loadM2: false, loadTerrain: true, clearScene: false);
+        }
+
+        /// <summary>Handles the Objects > Show WMO checkbox, loading WMOs on demand when absent.</summary>
+        private void OnWmoToggled(bool enabled)
+        {
+            if (_renderer == null) return;
+            _renderer.ShowWmoObjects = enabled;
+            _glControl?.Invalidate();
+
+            if (!enabled || _suppressSceneReload) return;
+            if (_renderer.WmoObjectCount > 0) return;
+
+            LoadAdtScene(loadWmo: true, loadM2: false, loadTerrain: false, clearScene: false);
+        }
+
+        /// <summary>Handles the Objects > Show M2 checkbox, loading doodads on demand when absent.</summary>
+        private void OnM2Toggled(bool enabled)
+        {
+            if (_renderer == null) return;
+            _renderer.ShowM2Objects = enabled;
+            _glControl?.Invalidate();
+
+            if (!enabled || _suppressSceneReload) return;
+            if (_renderer.M2ObjectCount > 0) return;
+
+            LoadAdtScene(loadWmo: false, loadM2: true, loadTerrain: false, clearScene: false);
         }
 
         /// <summary>

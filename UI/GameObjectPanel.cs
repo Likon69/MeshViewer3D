@@ -275,6 +275,20 @@ namespace MeshViewer3D.UI
 
         // ── Public API ────────────────────────────────────────────────────────
 
+        /// <summary>Show WMO checkbox state. Setting it raises <see cref="WmoVisibilityChanged"/>.</summary>
+        public bool ShowWmo
+        {
+            get => _chkShowWmo.Checked;
+            set => _chkShowWmo.Checked = value;
+        }
+
+        /// <summary>Show M2 checkbox state. Setting it raises <see cref="M2VisibilityChanged"/>.</summary>
+        public bool ShowM2
+        {
+            get => _chkShowM2.Checked;
+            set => _chkShowM2.Checked = value;
+        }
+
         /// <summary>
         /// Populates the panel from a parsed ADT tile.
         /// Uses unique filenames (WmoNames/M2Names arrays) — not raw instance counts.

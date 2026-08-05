@@ -62,7 +62,7 @@ namespace MeshViewer3D.Rendering
         /// </summary>
         public void LoadGeometry(IEnumerable<WmoGroup> groups, IReadOnlyList<MODF> modfs)
         {
-            Dispose();
+            ReleaseGpuBuffers();
 
             // ── 1. Build shared local-space geometry (vertex positions + colors) ──
             var vertexData = new List<float>();
@@ -122,10 +122,8 @@ namespace MeshViewer3D.Rendering
 
                 for (int i = 0; i < worldTris.Length; i++)
                 {
-                    var v = worldTris[i];
-                    if (v.X < boundsMin.X) boundsMin.X = v.X; else if (v.X > boundsMax.X) boundsMax.X = v.X;
-                    if (v.Y < boundsMin.Y) boundsMin.Y = v.Y; else if (v.Y > boundsMax.Y) boundsMax.Y = v.Y;
-                    if (v.Z < boundsMin.Z) boundsMin.Z = v.Z; else if (v.Z > boundsMax.Z) boundsMax.Z = v.Z;
+                    boundsMin = Vector3.ComponentMin(boundsMin, worldTris[i]);
+                    boundsMax = Vector3.ComponentMax(boundsMax, worldTris[i]);
                 }
             }
 
@@ -159,7 +157,8 @@ namespace MeshViewer3D.Rendering
             GL.BufferData(BufferTarget.ElementArrayBuffer, indices.Count * sizeof(uint),
                           indices.ToArray(), BufferUsageHint.StaticDraw);
 
-            // ── 4. Upload per-instance model matrices (4 vec4 columns) ─────────
+            // Attributes 2..5 carry the ROWS of the OpenTK matrix — same layout as
+            // GL.UniformMatrix4(transpose:false) uploads for the non-instanced path.
             _instanceVbo = GL.GenBuffer();
             GL.BindBuffer(BufferTarget.ArrayBuffer, _instanceVbo);
 
@@ -168,12 +167,10 @@ namespace MeshViewer3D.Rendering
             {
                 var M = modelMatrices[i];
                 int idx = i * 16;
-                // Each aModelRow* attribute is one column of uModel. OpenTK Matrix4 is
-                // column-major, so column j = (M.M(j+1)1, M.M(j+1)2, M.M(j+1)3, M.M(j+1)4).
-                instanceData[idx + 0]  = M.M11; instanceData[idx + 1]  = M.M21; instanceData[idx + 2]  = M.M31; instanceData[idx + 3]  = M.M41;
-                instanceData[idx + 4]  = M.M12; instanceData[idx + 5]  = M.M22; instanceData[idx + 6]  = M.M32; instanceData[idx + 7]  = M.M42;
-                instanceData[idx + 8]  = M.M13; instanceData[idx + 9]  = M.M23; instanceData[idx + 10] = M.M33; instanceData[idx + 11] = M.M43;
-                instanceData[idx + 12] = M.M14; instanceData[idx + 13] = M.M24; instanceData[idx + 14] = M.M34; instanceData[idx + 15] = M.M44;
+                instanceData[idx + 0]  = M.M11; instanceData[idx + 1]  = M.M12; instanceData[idx + 2]  = M.M13; instanceData[idx + 3]  = M.M14;
+                instanceData[idx + 4]  = M.M21; instanceData[idx + 5]  = M.M22; instanceData[idx + 6]  = M.M23; instanceData[idx + 7]  = M.M24;
+                instanceData[idx + 8]  = M.M31; instanceData[idx + 9]  = M.M32; instanceData[idx + 10] = M.M33; instanceData[idx + 11] = M.M34;
+                instanceData[idx + 12] = M.M41; instanceData[idx + 13] = M.M42; instanceData[idx + 14] = M.M43; instanceData[idx + 15] = M.M44;
             }
             GL.BufferData(BufferTarget.ArrayBuffer, instanceData.Length * sizeof(float),
                           instanceData, BufferUsageHint.StaticDraw);
@@ -203,34 +200,33 @@ namespace MeshViewer3D.Rendering
 
         /// <summary>
         /// Renders all instances of this WMO in a single draw call via glDrawElementsInstanced.
-        /// Caller is responsible for binding the instanced shader and setting uView / uProjection.
+        /// The caller binds the instanced shader and sets its uniforms once for the whole batch.
         /// </summary>
-        public void Render(Matrix4 view, Matrix4 projection, ShaderProgram instancedShader)
+        public void Draw()
         {
             if (_disposed || _indexCount == 0 || _instanceCount == 0) return;
-
-            instancedShader.Use();
-            instancedShader.SetMatrix4("uView", view);
-            instancedShader.SetMatrix4("uProjection", projection);
-            instancedShader.SetBool  ("uEnableLighting", true);
-            instancedShader.SetBool  ("uEnableFog",      false);
-            instancedShader.SetFloat ("uAlpha",          0.65f);
 
             GL.BindVertexArray(_vao);
             GL.DrawElementsInstanced(PrimitiveType.Triangles, _indexCount,
                                     DrawElementsType.UnsignedInt, IntPtr.Zero,
                                     _instanceCount);
-            GL.BindVertexArray(0);
         }
 
         public void Dispose()
         {
             if (_disposed) return;
+            ReleaseGpuBuffers();
+            _disposed = true;
+        }
+
+        private void ReleaseGpuBuffers()
+        {
             if (_vao != 0)         { GL.DeleteVertexArray(_vao); _vao = 0; }
             if (_vbo != 0)         { GL.DeleteBuffer(_vbo);      _vbo = 0; }
             if (_ebo != 0)         { GL.DeleteBuffer(_ebo);      _ebo = 0; }
             if (_instanceVbo != 0) { GL.DeleteBuffer(_instanceVbo); _instanceVbo = 0; }
-            _disposed = true;
+            _indexCount = 0;
+            _instanceCount = 0;
         }
 
         // ── Math helpers (duplicated from WmoRenderer; that class stays untouched) ──

@@ -18,6 +18,7 @@ namespace MeshViewer3D.Core.Formats.Wmo
     /// </summary>
     public sealed class WmoGroup
     {
+        private const byte FlagDetail    = 0x04; // MOPY: decorative, never collides
         private const byte FlagCollision = 0x08; // MOPY: solid (navmesh/physics)
         private const byte FlagRender    = 0x20; // MOPY: rendered by WoW client
         private const int  MogpHdrSize   = 68;   // v17 MOGP header is exactly 68 bytes
@@ -150,8 +151,15 @@ namespace MeshViewer3D.Core.Formats.Wmo
                 int  i1    = indices[t * 3 + 1];
                 int  i2    = indices[t * 3 + 2];
 
-                if ((flags & FlagCollision) != 0) { colBuf.Add(i0); colBuf.Add(i1); colBuf.Add(i2); }
-                if ((flags & FlagRender)    != 0) { renBuf.Add(i0); renBuf.Add(i1); renBuf.Add(i2); matBuf.Add(matId); }
+                // vmap-extractor rule: a triangle collides when it is explicitly flagged solid,
+                // or when it is rendered and not decorative. Testing F_COLLISION alone keeps only
+                // the few explicitly tagged faces — typically a building's foundation, which is
+                // why walls and roofs went missing.
+                bool isRender    = (flags & FlagRender) != 0;
+                bool isCollision = (flags & FlagCollision) != 0 || (isRender && (flags & FlagDetail) == 0);
+
+                if (isCollision) { colBuf.Add(i0); colBuf.Add(i1); colBuf.Add(i2); }
+                if (isRender)    { renBuf.Add(i0); renBuf.Add(i1); renBuf.Add(i2); matBuf.Add(matId); }
             }
 
             return new WmoGeometry(vertices, colBuf.ToArray(), renBuf.ToArray(), matBuf.ToArray());

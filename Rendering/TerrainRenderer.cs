@@ -115,9 +115,9 @@ namespace MeshViewer3D.Rendering
                     groupData[texId] = entry;
 
                     // Update bounds from this chunk's X/Z extents + height range.
-                    float chunkXMin = chunk.PositionX - GRID_SIZE;
+                    float chunkXMin = chunk.PositionX - CHUNK_SIZE;
                     float chunkXMax = chunk.PositionX;
-                    float chunkZMin = chunk.PositionY - GRID_SIZE;
+                    float chunkZMin = chunk.PositionY - CHUNK_SIZE;
                     float chunkZMax = chunk.PositionY;
                     float chunkYMin = chunk.BaseHeight;
                     float chunkYMax = chunk.BaseHeight;
