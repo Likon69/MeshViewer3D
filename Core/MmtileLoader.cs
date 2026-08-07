@@ -21,6 +21,7 @@ namespace MeshViewer3D.Core
         public const uint DETOUR_MAGIC_DNAV = 0x444E4156; // "DNAV" en little-endian (bytes: 56 41 4E 44)
         public const uint DETOUR_MAGIC_VAND = 0x5641564E; // "VAND" en little-endian (bytes: 4E 56 41 56)
         public const uint MMAP_MULTI_TILE_VERSION = 5;
+        public const uint MMAP_MULTI_TILE_VERSION_6 = 6;
 
         private static void Log(string message)
         {
@@ -62,7 +63,7 @@ namespace MeshViewer3D.Core
                 br.ReadUInt32(); // flags
 
                 // New 4x4 format: payload = [u32 blobSize + blob]*count
-                if (mmapVersion == MMAP_MULTI_TILE_VERSION)
+                if (mmapVersion == MMAP_MULTI_TILE_VERSION || mmapVersion == MMAP_MULTI_TILE_VERSION_6)
                 {
                     return LoadMultiTilePayload(br, filePath, mapId, tileX, tileY, payloadOrCount, dtVersion);
                 }
