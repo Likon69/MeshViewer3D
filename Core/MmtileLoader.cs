@@ -206,6 +206,8 @@ namespace MeshViewer3D.Core
                 Log($"  Area {kvp.Key} ({name}): {kvp.Value} polys");
             }
 
+            header = SanitizeBounds(header, vertices, detailVerts, tileX, tileY);
+
             return new NavMeshData
             {
                 FilePath = filePath,
@@ -223,6 +225,51 @@ namespace MeshViewer3D.Core
                 OffMeshConnections = offMesh
             };
         }
+
+        /// <summary>
+        /// Remplace les bornes non finies de l'en-tete par l'etendue reelle des vertices.
+        /// Certaines tiles extraites ont bmax.y = +inf alors que tous leurs vertices sont finis ;
+        /// camera, index de raycast et couleurs par hauteur lisent ces bornes et plus rien ne s'affiche.
+        /// </summary>
+        private static MeshHeader SanitizeBounds(MeshHeader header, Vector3[] vertices, Vector3[] detailVerts, int tileX, int tileY)
+        {
+            if (IsFinite(header.BMin) && IsFinite(header.BMax))
+                return header;
+
+            float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
+            float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
+            foreach (var set in new[] { vertices, detailVerts })
+            {
+                foreach (var v in set)
+                {
+                    if (!IsFinite(v))
+                        continue;
+                    if (v.X < minX) minX = v.X;
+                    if (v.Y < minY) minY = v.Y;
+                    if (v.Z < minZ) minZ = v.Z;
+                    if (v.X > maxX) maxX = v.X;
+                    if (v.Y > maxY) maxY = v.Y;
+                    if (v.Z > maxZ) maxZ = v.Z;
+                }
+            }
+            if (minX > maxX)
+                return header;
+
+            var bmin = new Vector3(
+                float.IsFinite(header.BMin.X) ? header.BMin.X : minX,
+                float.IsFinite(header.BMin.Y) ? header.BMin.Y : minY,
+                float.IsFinite(header.BMin.Z) ? header.BMin.Z : minZ);
+            var bmax = new Vector3(
+                float.IsFinite(header.BMax.X) ? header.BMax.X : maxX,
+                float.IsFinite(header.BMax.Y) ? header.BMax.Y : maxY,
+                float.IsFinite(header.BMax.Z) ? header.BMax.Z : maxZ);
+            Log($"Tile ({tileX},{tileY}): bornes non finies bmin=({header.BMin.X},{header.BMin.Y},{header.BMin.Z}) bmax=({header.BMax.X},{header.BMax.Y},{header.BMax.Z}) remplacees par bmin=({bmin.X:F1},{bmin.Y:F1},{bmin.Z:F1}) bmax=({bmax.X:F1},{bmax.Y:F1},{bmax.Z:F1})");
+            header.BMin = bmin;
+            header.BMax = bmax;
+            return header;
+        }
+
+        private static bool IsFinite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
 
         /// <summary>
         /// Lit le header Detour (96 bytes)
